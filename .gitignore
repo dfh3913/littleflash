@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Virtual environments / package-manager caches
+.venv/
+.uv-cache/
+uv.lock.bak
+
+# Runtime secrets and state
+data/.secret_key
+data/preferences.json
+data/.*.lock
+data/.*.tmp
+
+# Upstream audio cache
+.cache/
+
+# Local diagnostics and screenshots
+.artifacts/
+*.log
+.DS_Store

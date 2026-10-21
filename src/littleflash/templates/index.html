@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}闪词 · 让单词一闪入心{% endblock %}
+{% block body_class %}page-home{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/home.css', v=asset_version) }}">
+{% endblock %}
+{% block header_actions %}
+  <span class="sr-only" id="libraryStatus" data-state="loading" role="status" aria-live="polite">
+    <span id="libraryStatusText">正在连接词库</span>
+  </span>
+  <button class="icon-button icon-button--sound" id="soundToggle" type="button" aria-label="关闭发音" aria-pressed="true" title="关闭发音">
+    <svg class="icon sound-on" aria-hidden="true"><use href="#icon-volume"></use></svg>
+    <svg class="icon sound-off" aria-hidden="true" hidden><use href="#icon-volume-off"></use></svg>
+    <span class="sound-wait-dot" aria-hidden="true" hidden></span>
+  </button>
+  <a class="header-link" href="{{ url_for('settings_page') }}" title="打开设置">
+    <svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg>
+    <span>设置</span>
+  </a>
+{% endblock %}
+
+{% block content %}
+<main id="main" class="container study-main">
+  <section class="study-panel" aria-label="闪词学习区">
+    <header class="study-topbar">
+      <div class="study-book">
+        <span class="study-book__mark" aria-hidden="true"><svg class="icon"><use href="#icon-book"></use></svg></span>
+        <div class="study-book__copy">
+          <span class="study-book__kicker">正在学习</span>
+          <h1 class="study-book__title" id="bookTitle">正在读取词书</h1>
+          <p class="study-book__meta">
+            <span id="bookStage">—</span>
+            <span class="meta-dot" aria-hidden="true"></span>
+            <span id="bookCount">— 个单词</span>
+          </p>
+        </div>
+      </div>
+      <div class="study-progress">
+        <div class="study-progress__head">
+          <span>本轮进度</span>
+          <strong id="bookProgressText">— / —</strong>
+        </div>
+        <div class="progress-track" aria-hidden="true"><span id="bookProgress"></span></div>
+      </div>
+    </header>
+
+    <div class="study-context">
+      <div class="context-chip">
+        <svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>
+        <span id="unitLabel">正在加载学习范围</span>
+      </div>
+      <div class="study-context__right">
+        <span class="round-badge" id="roundBadge">第 1 轮</span>
+        <span class="pace-chip" id="paceChip">
+          <span class="pace-chip__dot" aria-hidden="true"></span>
+          <span id="paceText">自动 · 4 秒</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="card-stack">
+      <span class="card-sheet" aria-hidden="true"></span>
+      <article class="flashcard" id="flashcard" tabindex="0" aria-describedby="cardInstructions">
+        <span class="card-grain" aria-hidden="true"></span>
+        <span class="card-watermark" id="cardWatermark" aria-hidden="true">Aa</span>
+
+        <div class="card-state" id="cardState">
+          <div class="card-state__inner">
+            <span class="state-loader" id="stateLoader" aria-hidden="true">
+              <svg class="icon"><use href="#icon-loader"></use></svg>
+            </span>
+            <p class="card-state__eyebrow" id="cardStateEyebrow">WORDS ON THE WAY</p>
+            <h2 class="card-state__title" id="cardStateTitle">正在展开词书</h2>
+            <p class="card-state__message" id="cardStateMessage">为你整理今天的单词与节奏…</p>
+            <div class="card-state__actions">
+              <button class="soft-button" id="retryLoad" type="button" hidden>重新加载</button>
+              <a class="soft-button" id="emptySettings" href="{{ url_for('settings_page') }}" hidden>管理词书</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-main" id="cardMain" hidden>
+          <header class="card-head">
+            <span class="face-label" id="faceLabel">
+              <span class="face-label__dot" aria-hidden="true"></span>
+              <span id="faceLabelText">ENGLISH</span>
+            </span>
+            <button class="card-replay" id="replayBtn" type="button" aria-label="重播单词发音" title="重播发音（R）">
+              <svg class="icon" aria-hidden="true"><use href="#icon-volume"></use></svg>
+            </button>
+          </header>
+
+          <div class="card-content" id="cardContent">
+            <div class="word-block" id="wordBlock">
+              <h2 class="word" id="wordText"></h2>
+              <p class="phonetic" id="phoneticText"></p>
+            </div>
+            <div class="meaning-block" id="meaningBlock" hidden>
+              <span class="meaning-quote" aria-hidden="true">“</span>
+              <p class="meaning" id="meaningText"></p>
+            </div>
+          </div>
+
+          <footer class="card-foot">
+            <span class="card-tip" id="cardTip">
+              <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
+              <span id="cardTipText">点击翻面</span>
+            </span>
+          </footer>
+        </div>
+
+        <div class="card-word-progress" aria-hidden="true"><span id="cardWordProgress"></span></div>
+      </article>
+    </div>
+
+    <p class="sr-only" id="cardInstructions">闪卡会根据设置自动切换。按空格暂停或继续，按左右方向键切换单词，按 R 键重播发音。</p>
+
+    <div class="player">
+      <div class="player__controls">
+        <button class="round-control" id="prevBtn" type="button" aria-label="上一个单词" title="上一个单词（←）" aria-keyshortcuts="ArrowLeft" disabled>
+          <svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
+        </button>
+        <button class="primary-action" id="playBtn" type="button" aria-keyshortcuts="Space" disabled>
+          <span class="primary-action__spinner" aria-hidden="true"></span>
+          <svg class="icon primary-action__icon" id="iconPause" aria-hidden="true"><use href="#icon-pause"></use></svg>
+          <svg class="icon primary-action__icon" id="iconPlay" aria-hidden="true" hidden><use href="#icon-play"></use></svg>
+          <svg class="icon primary-action__icon" id="iconAdvance" aria-hidden="true" hidden><use href="#icon-arrow-right"></use></svg>
+          <span class="primary-action__label" id="playLabel">暂停</span>
+        </button>
+        <button class="round-control" id="nextBtn" type="button" aria-label="下一个单词" title="下一个单词（→）" aria-keyshortcuts="ArrowRight" disabled>
+          <svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
+        </button>
+      </div>
+      <div class="player__meta">
+        <span class="player__hint"><span class="live-dot" id="liveDot" aria-hidden="true"></span><span id="playerHint">正在准备学习节奏…</span></span>
+        <span class="player__shortcut"><kbd>Space</kbd><span id="playerSpaceHint">暂停</span><span class="shortcut-sep">·</span><kbd>←</kbd><kbd>→</kbd><span>切换</span></span>
+      </div>
+    </div>
+
+    <noscript>
+      <div class="noscript-note">闪词需要 JavaScript 才能播放与切换单词，请启用后再试。</div>
+    </noscript>
+  </section>
+</main>
+{% endblock %}
+
+{% block footer %}{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/app.js', v=asset_version) }}"></script>
+{% endblock %}

@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}设置 · 闪词 LittleFlash{% endblock %}
+{% block meta %}
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="settings-mode" content="{{ 'server' if authenticated else 'local' }}">
+{% endblock %}
+{% block body_class %}page-settings{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css', v=asset_version) }}">
+{% endblock %}
+
+{% block header_actions %}
+  <a class="header-link header-link--back" href="{{ url_for('index') }}">
+    <svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
+    <span>返回闪卡</span>
+  </a>
+  {% if authenticated %}
+    <button class="header-button" id="logoutBtn" type="button">
+      <svg class="icon" aria-hidden="true"><use href="#icon-logout"></use></svg>
+      <span>退出</span>
+    </button>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<main id="main" class="container settings-main">
+  <div class="mode-banner" data-mode="{{ 'server' if authenticated else 'local' }}">
+    <span class="mode-banner__icon" aria-hidden="true">
+      <svg class="icon"><use href="#icon-{{ 'shield' if authenticated else 'spark' }}"></use></svg>
+    </span>
+    <div class="mode-banner__text">
+      {% if authenticated %}
+        <strong>已登录 · 更改会写入服务器</strong>
+        <p>这些设置对所有访问者生效。退出登录后，本浏览器会回到它自己的本地设置。</p>
+      {% else %}
+        <strong>本地模式 · 无需密码即可调整</strong>
+        <p>更改只保存在这台设备的浏览器里，不影响其他人，也不会写入服务器配置。</p>
+      {% endif %}
+    </div>
+    {% if authenticated %}
+      <span class="mode-badge">服务器</span>
+    {% else %}
+      <button class="outline-button mode-banner__action" id="toggleLogin" type="button" aria-expanded="false" aria-controls="adminLogin">
+        <svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg>
+        <span>管理员登录</span>
+      </button>
+    {% endif %}
+  </div>
+
+  {% if not authenticated %}
+  <section class="admin-login" id="adminLogin" aria-label="管理员登录" hidden>
+    <form id="loginForm" class="login-form" novalidate>
+      <div class="admin-login__field">
+        <label class="field-label" for="settingsPassword">访问密码</label>
+        <div class="password-field">
+          <input id="settingsPassword" name="password" type="password" autocomplete="current-password" placeholder="登录后可修改全站默认设置" required aria-describedby="loginError">
+          <button class="password-reveal" id="passwordReveal" type="button" aria-label="显示密码" title="显示密码">
+            <svg class="icon reveal-on" aria-hidden="true"><use href="#icon-eye"></use></svg>
+            <svg class="icon reveal-off" aria-hidden="true" hidden><use href="#icon-eye-off"></use></svg>
+          </button>
+        </div>
+      </div>
+      <button class="login-submit primary-action" id="loginSubmit" type="submit">
+        <span class="primary-action__spinner" aria-hidden="true"></span>
+        <span class="primary-action__label">登录</span>
+        <svg class="icon primary-action__icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
+      </button>
+      <p class="form-error" id="loginError" role="alert" hidden></p>
+    </form>
+    <p class="admin-login__note">
+      <svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>
+      密码保存在服务器 <code>config.yml</code>，只用于修改全站默认设置；连续错误会暂时锁定。
+    </p>
+  </section>
+  {% endif %}
+
+  <section class="settings-heading" aria-labelledby="settingsTitle">
+    <div>
+      <p class="eyebrow"><span class="eyebrow__line"></span>Learning settings</p>
+      <h1 class="settings-title" id="settingsTitle">学习设置</h1>
+      <p class="settings-intro">调整词书、闪示节奏和声音。{% if authenticated %}所有更改会自动保存到服务器。{% else %}所有更改会自动保存在本机浏览器。{% endif %}</p>
+    </div>
+    <div class="save-status" id="saveStatus" data-state="saved" role="status" aria-live="polite">
+      <span class="save-status__icon" aria-hidden="true">
+        <svg class="save-icon save-icon--check"><use href="#icon-check"></use></svg>
+        <svg class="save-icon save-icon--spinner"><use href="#icon-loader"></use></svg>
+        <svg class="save-icon save-icon--error"><use href="#icon-close"></use></svg>
+      </span>
+      <span id="saveStatusText">{% if authenticated %}所有更改已保存{% else %}已保存到本机{% endif %}</span>
+      <button class="save-retry" id="saveRetry" type="button" hidden>重试</button>
+    </div>
+  </section>
+
+  <div class="settings-layout">
+    <form class="settings-form" id="settingsForm" novalidate autocomplete="off">
+      {% if not books %}
+        <div class="empty-library">
+          <span class="empty-library__icon"><svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg></span>
+          <div>
+            <strong>词书目录还是空的</strong>
+            <p>把词书 JSON 放入 <code>src/wordbooks</code>，刷新页面后会自动识别。</p>
+          </div>
+        </div>
+      {% endif %}
+
+      <section class="setting-card" aria-labelledby="bookSectionTitle">
+        <header class="setting-card__head">
+          <span class="section-number">01</span>
+          <div>
+            <h2 id="bookSectionTitle">词书与范围</h2>
+            <p>选择想学的词书，也可以只专注其中一个单元。</p>
+          </div>
+        </header>
+
+        <div class="field-grid">
+          <div class="field">
+            <label class="field-label" for="wordbookSelect">当前词书</label>
+            <div class="select-shell">
+              <select id="wordbookSelect" name="wordbook_id" {% if not books %}disabled{% endif %}>
+                {% for book in books %}
+                  <option value="{{ book.id }}"
+                    data-title="{{ book.title }}"
+                    data-stage="{{ book.stage }}"
+                    data-edition="{{ book.edition }}"
+                    data-unit-count="{{ book.unitCount }}"
+                    data-word-count="{{ book.wordCount }}"
+                    {% if selected_book_id == book.id %}selected{% endif %}>
+                    {{ book.title }}
+                  </option>
+                {% endfor %}
+              </select>
+              <svg class="icon select-chevron" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
+            </div>
+            <p class="field-hint">词书会从词书目录动态识别。</p>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="unitSelect">学习范围</label>
+            <div class="select-shell">
+              <select id="unitSelect" name="unit_id" {% if not units %}disabled{% endif %}>
+                <option value="all" {% if preferences and preferences.unit_id == 'all' %}selected{% endif %}>整本词书</option>
+                {% for unit in units %}
+                  <option value="{{ unit.id }}" {% if preferences and preferences.unit_id == unit.id %}selected{% endif %}>{{ unit.title }} · {{ unit.wordCount }} 词</option>
+                {% endfor %}
+              </select>
+              <svg class="icon select-chevron" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
+            </div>
+            <p class="field-hint">切换词书后，范围会回到整本词书。</p>
+          </div>
+        </div>
+
+        {% if books %}
+        <div class="book-brief" id="currentBook">
+          <span class="book-brief__icon" aria-hidden="true"><svg class="icon"><use href="#icon-book"></use></svg></span>
+          <div class="book-brief__text">
+            <strong id="currentBookTitle">{{ selected_book.title if selected_book else '—' }}</strong>
+            <span id="currentBookMeta">{{ (selected_book.stage ~ ' · ' ~ selected_book.edition) if selected_book and (selected_book.stage or selected_book.edition) else '本地词书' }} · {{ units|length }} 个单元</span>
+          </div>
+          <span class="count-chip" id="currentBookCount">{{ selected_book.wordCount if selected_book else 0 }} 词</span>
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="setting-card" aria-labelledby="displaySectionTitle">
+        <header class="setting-card__head">
+          <span class="section-number">02</span>
+          <div>
+            <h2 id="displaySectionTitle">闪示规则</h2>
+            <p>决定每一面停留多久，以及单词以怎样的顺序出现。</p>
+          </div>
+        </header>
+
+        <fieldset class="form-group">
+          <legend class="group-label">显示方向 <span>先显示哪一面</span></legend>
+          <div class="choice-grid">
+            <label class="choice-card">
+              <input class="choice-input" type="radio" name="front" value="en" {% if not preferences or preferences.front == 'en' %}checked{% endif %}>
+              <span class="choice-content">
+                <span class="choice-visual">
+                  <span class="mini-face mini-face--en">serendipity</span>
+                  <span class="mini-arrow"><svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg></span>
+                  <span class="mini-face mini-face--zh">不期而遇</span>
+                </span>
+                <span class="choice-copy"><strong>先英后中</strong><small>看着词面，回忆释义</small></span>
+                <span class="choice-check" aria-hidden="true"><svg class="icon"><use href="#icon-check"></use></svg></span>
+              </span>
+            </label>
+            <label class="choice-card">
+              <input class="choice-input" type="radio" name="front" value="zh" {% if preferences and preferences.front == 'zh' %}checked{% endif %}>
+              <span class="choice-content">
+                <span class="choice-visual">
+                  <span class="mini-face mini-face--zh">不期而遇</span>
+                  <span class="mini-arrow"><svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg></span>
+                  <span class="mini-face mini-face--en">serendipity</span>
+                </span>
+                <span class="choice-copy"><strong>先中后英</strong><small>反向记忆，检验拼写</small></span>
+                <span class="choice-check" aria-hidden="true"><svg class="icon"><use href="#icon-check"></use></svg></span>
+              </span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="split-fields">
+          <fieldset class="form-group">
+            <legend class="group-label">显示顺序</legend>
+            <div class="segmented-control">
+              <label>
+                <input type="radio" name="order" value="sequence" {% if not preferences or preferences.order == 'sequence' %}checked{% endif %}>
+                <span><svg class="icon" aria-hidden="true"><use href="#icon-list"></use></svg>按词书顺序</span>
+              </label>
+              <label>
+                <input type="radio" name="order" value="shuffle" {% if preferences and preferences.order == 'shuffle' %}checked{% endif %}>
+                <span><svg class="icon" aria-hidden="true"><use href="#icon-shuffle"></use></svg>随机打乱</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-group">
+            <legend class="group-label">切换方式</legend>
+            <div class="segmented-control">
+              <label>
+                <input type="radio" name="mode" value="auto" {% if not preferences or preferences.mode == 'auto' %}checked{% endif %}>
+                <span><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>自动切换</span>
+              </label>
+              <label>
+                <input type="radio" name="mode" value="manual" {% if preferences and preferences.mode == 'manual' %}checked{% endif %}>
+                <span><svg class="icon" aria-hidden="true"><use href="#icon-headphones"></use></svg>手动切换</span>
+              </label>
+            </div>
+          </fieldset>
+        </div>
+
+        <div class="range-field {% if preferences and preferences.mode == 'manual' %}is-inactive{% endif %}" id="intervalField">
+          <div class="range-head">
+            <label class="field-label" for="intervalRange">自动切换间隔</label>
+            <output class="range-output" for="intervalRange"><strong id="intervalOutput">{{ '%g'|format(preferences.interval_seconds if preferences else 4) }}</strong><span>秒 / 面</span></output>
+          </div>
+          <input class="range-input" id="intervalRange" name="interval_seconds" type="range" min="1" max="30" step="0.5" value="{{ preferences.interval_seconds if preferences else 4 }}">
+          <div class="range-scale" aria-hidden="true"><span>1s</span><span>15s</span><span>30s</span></div>
+          <p class="field-hint" id="intervalHint">每一面停留设定时间后，自动翻开下一面。</p>
+        </div>
+      </section>
+
+      <section class="setting-card" aria-labelledby="audioSectionTitle">
+        <header class="setting-card__head">
+          <span class="section-number">03</span>
+          <div>
+            <h2 id="audioSectionTitle">声音与体验</h2>
+            <p>英文显示与中文显示时，都会朗读当前单词。</p>
+          </div>
+        </header>
+
+        <div class="toggle-row">
+          <span class="toggle-row__icon" aria-hidden="true"><svg class="icon"><use href="#icon-volume"></use></svg></span>
+          <div class="toggle-row__copy">
+            <strong>单词发音</strong>
+            <p>音频由网易有道词典提供。首次播放前，浏览器可能需要一次点击授权。</p>
+          </div>
+          <label class="switch">
+            <input id="audioToggle" name="audio_enabled" type="checkbox" {% if not preferences or preferences.audio_enabled %}checked{% endif %}>
+            <span class="switch-track" aria-hidden="true"><span></span></span>
+            <span class="sr-only">开启或关闭单词发音</span>
+          </label>
+        </div>
+
+        <div class="range-field {% if preferences and not preferences.audio_enabled %}is-inactive{% endif %}" id="volumeField">
+          <div class="range-head">
+            <label class="field-label" for="volumeRange">发音音量</label>
+            <output class="range-output" for="volumeRange"><strong id="volumeOutput">{{ (preferences.audio_volume * 100)|round|int if preferences else 80 }}</strong><span>%</span></output>
+          </div>
+          <input class="range-input" id="volumeRange" name="audio_volume" type="range" min="0" max="100" step="5" value="{{ (preferences.audio_volume * 100)|round|int if preferences else 80 }}">
+          <div class="range-scale" aria-hidden="true"><span>静音</span><span>正好</span><span>最大</span></div>
+        </div>
+      </section>
+
+      <section class="danger-card" aria-labelledby="resetSectionTitle">
+        <div>
+          <h2 id="resetSectionTitle">恢复默认设置</h2>
+          <p>重置词书、方向、节奏与声音，回到初始状态。</p>
+        </div>
+        <button class="outline-button" id="resetBtn" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
+          恢复默认
+        </button>
+      </section>
+
+      <p class="form-footnote"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>{% if authenticated %}更改会自动保存到服务器，对所有访问者生效；设置页密码与服务器密钥不会被写入浏览器存储。{% else %}更改会自动保存在本机浏览器（localStorage），不会上传服务器，也不会影响其他人。{% endif %}</p>
+    </form>
+
+    <aside class="settings-aside" aria-label="设置预览">
+      <section class="preview-panel">
+        <div class="preview-panel__head">
+          <span class="insight-kicker">Live preview</span>
+          <span class="live-badge"><span aria-hidden="true"></span>实时</span>
+        </div>
+        <div class="preview-flashcard" id="previewCard" tabindex="0" aria-label="设置预览卡，按回车翻面" data-face="{{ preferences.front if preferences else 'en' }}">
+          <div class="preview-flashcard__head">
+            <span class="preview-face-label" id="previewFaceLabel">ENGLISH</span>
+            <button class="preview-sound" id="previewSound" type="button" aria-label="试听单词发音" title="试听单词发音">
+              <svg class="icon" aria-hidden="true"><use href="#icon-volume"></use></svg>
+            </button>
+          </div>
+          <div class="preview-flashcard__body">
+            <div id="previewWordBlock">
+              <span class="preview-word" id="previewWord">{{ preview.en if preview else 'serendipity' }}</span>
+              <span class="preview-phonetic" id="previewPhonetic">{{ preview.phonetic if preview else '/ˌserənˈdɪpəti/' }}</span>
+            </div>
+            <div class="preview-meaning-wrap" id="previewMeaningBlock" hidden>
+              <span class="preview-meaning" id="previewMeaning">{{ preview.zh if preview else 'n. 不期而遇的美好；意外发现珍奇事物的本领' }}</span>
+            </div>
+          </div>
+          <div class="preview-flashcard__foot">
+            <span id="previewUnit">{{ preview.unitTitle if preview else '预览' }}</span>
+            <span class="preview-index">01</span>
+          </div>
+          <span class="preview-watermark" id="previewWatermark" aria-hidden="true">Aa</span>
+        </div>
+        <p class="preview-caption" id="previewCaption">正在读取你的学习节奏…</p>
+        <div class="preview-progress" aria-hidden="true"><span id="previewProgress"></span></div>
+      </section>
+
+    </aside>
+  </div>
+
+  <dialog class="confirm-dialog" id="resetDialog" aria-labelledby="resetDialogTitle">
+    <span class="confirm-dialog__icon" aria-hidden="true"><svg class="icon"><use href="#icon-refresh"></use></svg></span>
+    <h2 id="resetDialogTitle">恢复默认设置？</h2>
+    <p>{% if authenticated %}词书、显示方向、切换节奏与声音都会回到初始状态。此操作无法撤销。{% else %}会清除本机浏览器保存的设置，回到站点默认值。{% endif %}</p>
+    <div class="confirm-dialog__actions">
+      <button class="outline-button" id="cancelReset" type="button">取消</button>
+      <button class="danger-button" id="confirmReset" type="button">恢复默认</button>
+    </div>
+  </dialog>
+</main>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/settings.js', v=asset_version) }}"></script>
+{% endblock %}
