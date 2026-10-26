@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}我的学习档案 · 闪词 LittleFlash{% endblock %}
+{% block body_class %}page-account{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/account.css', v=asset_version) }}">
+{% endblock %}
+{% block header_actions %}
+  <a class="header-link header-link--back" href="{{ url_for('index') }}">
+    <svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
+    <span>返回闪卡</span>
+  </a>
+  <a class="header-link" href="{{ url_for('settings_page') }}">
+    <svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg>
+    <span>设置</span>
+  </a>
+{% endblock %}
+
+{% block content %}
+{% set seconds = progress.totalSeconds if progress else 0 %}
+{% set hours = seconds // 3600 %}
+{% set minutes = (seconds % 3600) // 60 %}
+{% set total_words = progress_book.wordCount if progress_book else 0 %}
+{% set percent = (((progress.wordIndex + 1) / total_words * 100)|round|int) if progress and total_words else 0 %}
+
+<main id="main" class="container account-main" data-page="dashboard">
+  <section class="account-heading" aria-labelledby="accountTitle">
+    <div>
+      <p class="eyebrow"><span class="eyebrow__line"></span>My progress</p>
+      <h1 class="account-title" id="accountTitle">我的学习档案</h1>
+      <p class="account-intro">学习进度每十几秒自动同步一次，关掉页面前也会补一次；换设备登录即可接着学。</p>
+    </div>
+    <div class="account-heading__actions">
+      <a class="outline-button" href="{{ url_for('index') }}">
+        <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
+        继续学习
+      </a>
+      <button class="header-button account-logout" id="logoutBtn" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#icon-logout"></use></svg>
+        <span>退出登录</span>
+      </button>
+    </div>
+  </section>
+
+  <section class="identity-card" aria-label="账号信息">
+    <span class="identity-avatar" aria-hidden="true">{{ account.username[0]|upper }}</span>
+    <div class="identity-copy">
+      <strong>{{ account.username }}</strong>
+      <span class="role-chip role-chip--{{ account.role }}">{{ account.role_label }}</span>
+      <p id="identityMeta" data-last-login="{{ account.last_login_at or '' }}">欢迎回来，今天也学一点。</p>
+    </div>
+    {% if account.is_superadmin %}
+      <a class="soft-link" href="{{ url_for('settings_page', scope='site') }}">
+        <svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>
+        编辑未登录用户的默认设置
+      </a>
+    {% endif %}
+  </section>
+
+  <section class="stat-grid" aria-label="学习统计">
+    <article class="stat-card">
+      <span class="stat-card__label"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>累计学习时长</span>
+      <strong class="stat-card__value" id="statSeconds" data-seconds="{{ seconds }}">
+        {% if hours %}{{ hours }} 小时 {% endif %}{{ minutes }} 分
+        {% if not hours and not minutes %}0 分{% endif %}
+      </strong>
+      <span class="stat-card__hint">只统计停留在学习页的时间</span>
+    </article>
+
+    <article class="stat-card">
+      <span class="stat-card__label"><svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>当前词书</span>
+      <strong class="stat-card__value stat-card__value--text" id="statBook">
+        {{ progress.wordbookTitle or progress.wordbookId if progress else '还没开始' }}
+      </strong>
+      <span class="stat-card__hint" id="statScope">
+        {% if progress %}{{ '整本词书' if progress.unitId == 'all' else progress.unitId }}{% else %}选一本词书开始吧{% endif %}
+      </span>
+    </article>
+
+    <article class="stat-card">
+      <span class="stat-card__label"><svg class="icon" aria-hidden="true"><use href="#icon-chart"></use></svg>当前进度</span>
+      <strong class="stat-card__value" id="statWord">
+        {% if progress %}第 {{ progress.wordIndex + 1 }} 个{% else %}—{% endif %}
+      </strong>
+      <span class="stat-card__hint" id="statWordEn">{{ progress.wordEn if progress and progress.wordEn else '等待第一次学习' }}</span>
+    </article>
+
+    <article class="stat-card">
+      <span class="stat-card__label"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>完成轮次</span>
+      <strong class="stat-card__value" id="statRounds">{{ progress.rounds if progress else 0 }}</strong>
+      <span class="stat-card__hint" id="statRecent" data-last-study="{{ progress.lastStudyAt or '' if progress else '' }}">最近学习：—</span>
+    </article>
+  </section>
+
+  <section class="account-card progress-card" aria-labelledby="progressTitle">
+    <header class="account-card__head">
+      <div>
+        <h2 id="progressTitle">学习位置</h2>
+        <p>自动记录的断点，下次打开首页会从这里继续。</p>
+      </div>
+      <span class="account-chip" id="progressPercent">{{ percent }}%</span>
+    </header>
+
+    <progress
+      class="account-progress"
+      id="progressBar"
+      max="100"
+      value="{{ percent }}"
+      aria-label="当前词书进度 {{ percent }}%"
+    >{{ percent }}%</progress>
+    <p class="account-progress__caption" id="progressCaption">
+      {% if progress and progress_book %}
+        {{ progress_book.title }} · 共 {{ total_words }} 词
+      {% elif progress %}
+        {{ progress.wordbookTitle or progress.wordbookId }}
+      {% else %}
+        还没有学习记录
+      {% endif %}
+    </p>
+
+    <div class="account-card__foot">
+      <span>登录状态下，每次切词与每 12 秒会同步一次。</span>
+      <a class="text-link" href="{{ url_for('settings_page') }}">调整学习设置<svg class="icon" aria-hidden="true"><use href="#icon-arrow-up-right"></use></svg></a>
+    </div>
+  </section>
+
+  <section class="account-card" aria-labelledby="passwordTitle">
+    <header class="account-card__head">
+      <div>
+        <h2 id="passwordTitle">修改密码</h2>
+        <p>初始密码与用户名相同，建议换成只有你知道的密码。</p>
+      </div>
+      <span class="account-chip account-chip--muted"><svg class="icon" aria-hidden="true"><use href="#icon-key"></use></svg>安全</span>
+    </header>
+
+    <form class="password-form" id="passwordForm" novalidate autocomplete="off">
+      <div class="form-field">
+        <label class="form-label" for="currentPassword">当前密码</label>
+        <input class="form-input" id="currentPassword" name="current_password" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="newPassword">新密码</label>
+        <input class="form-input" id="newPassword" name="new_password" type="password" autocomplete="new-password" minlength="6" required>
+        <p class="form-hint">至少 6 位。</p>
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="confirmPassword">确认新密码</label>
+        <input class="form-input" id="confirmPassword" name="confirm_password" type="password" autocomplete="new-password" minlength="6" required>
+      </div>
+      <p class="form-error" id="passwordError" role="alert" hidden></p>
+      <p class="form-success" id="passwordSuccess" role="status" hidden>密码已更新。</p>
+      <div class="password-form__actions">
+        <button class="outline-button" id="passwordSubmit" type="submit">
+          <svg class="icon" aria-hidden="true"><use href="#icon-key"></use></svg>
+          更新密码
+        </button>
+      </div>
+    </form>
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/account.js', v=asset_version) }}"></script>
+{% endblock %}

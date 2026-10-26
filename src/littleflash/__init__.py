@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-__version__ = "1.0.0"
+__version__ = "0.2.0"
 
 
 def main() -> None:
@@ -14,7 +14,11 @@ def main() -> None:
         prog="littleflash",
         description="闪词 LittleFlash —— 本地优先的单词闪卡服务",
     )
-    parser.add_argument("--config", help="config.yml 路径（默认自动查找）")
+    parser.add_argument(
+        "--home",
+        help="项目根目录（默认由 LITTLEFLASH_HOME 或代码位置推断）",
+    )
+    parser.add_argument("--db", help="SQLite 数据库路径（默认 <项目根>/data/littleflash.db）")
     parser.add_argument("--host", help="覆盖监听地址")
     parser.add_argument("--port", type=int, help="覆盖监听端口")
     parser.add_argument(
@@ -29,11 +33,18 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    import os
+
+    if args.home:
+        os.environ["LITTLEFLASH_HOME"] = args.home
+    if args.db:
+        os.environ["LITTLEFLASH_DB"] = args.db
+
     from .app import create_app
     from .config import ConfigError, load_config
 
     try:
-        config = load_config(args.config)
+        config = load_config()
     except ConfigError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         raise SystemExit(2) from exc
@@ -41,9 +52,11 @@ def main() -> None:
     host = args.host or config.host
     port = args.port or config.port
     debug = bool(args.debug or config.debug)
-    app = create_app(str(config.config_path))
+    app = create_app(config)
     print(f"闪词已启动：http://{host}:{port}")
+    print(f"数据库：    {config.db_path}")
     print(f"设置页：    http://{host}:{port}/settings")
+    print(f"用户中心：  http://{host}:{port}/account")
     app.run(host=host, port=port, debug=debug)
 
 

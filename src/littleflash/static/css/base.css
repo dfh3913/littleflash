@@ -429,6 +429,51 @@ code {
   height: 17px;
 }
 
+/* 已登录账号：首字母头像 + 用户名 */
+.header-avatar {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: -4px;
+  border-radius: 50%;
+  color: var(--lime);
+  background: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.header-link--account {
+  padding-left: 9px;
+}
+
+.header-username {
+  max-width: 9ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-link--admin {
+  color: var(--teal);
+}
+
+@media (max-width: 640px) {
+  .header-username {
+    display: none;
+  }
+
+  .header-link--account {
+    padding: 0 10px;
+  }
+
+  .header-link--admin span {
+    display: none;
+  }
+}
+
 .header-button {
   display: inline-flex;
   align-items: center;

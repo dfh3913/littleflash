@@ -3,7 +3,7 @@
   "use strict";
 
   const csrfMeta = document.querySelector('meta[name="csrf-token"]');
-  const csrfToken = csrfMeta ? csrfMeta.getAttribute("content") || "" : "";
+  let csrfToken = csrfMeta ? csrfMeta.getAttribute("content") || "" : "";
 
   /* 应用可能部署在子路径（如 /littleflash）下，base 由服务端注入。 */
   const baseMeta = document.querySelector('meta[name="app-base"]');
@@ -296,6 +296,54 @@
     return STAGE_LABELS[key] || String(stage);
   }
 
+  function formatDuration(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    if (total < 60) return total > 0 ? "不足 1 分" : "0 分";
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    if (hours > 0) {
+      return minutes > 0 ? hours + " 小时 " + minutes + " 分" : hours + " 小时";
+    }
+    return minutes + " 分";
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, "0");
+  }
+
+  function formatDateTime(timestamp) {
+    const value = Number(timestamp);
+    if (!isFinite(value) || value <= 0) return "—";
+    const date = new Date(value * 1000);
+    if (isNaN(date.getTime())) return "—";
+    return (
+      date.getFullYear() +
+      "-" +
+      pad2(date.getMonth() + 1) +
+      "-" +
+      pad2(date.getDate()) +
+      " " +
+      pad2(date.getHours()) +
+      ":" +
+      pad2(date.getMinutes())
+    );
+  }
+
+  function formatRelative(timestamp) {
+    const value = Number(timestamp);
+    if (!isFinite(value) || value <= 0) return "—";
+    const diff = Math.floor(Date.now() / 1000) - value;
+    if (diff < 60) return "刚刚";
+    if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
+    if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
+    if (diff < 86400 * 7) return Math.floor(diff / 86400) + " 天前";
+    return formatDateTime(value);
+  }
+
+  function setCsrfToken(value) {
+    if (typeof value === "string" && value) csrfToken = value;
+  }
+
   window.LF = {
     api: api,
     url: url,
@@ -311,6 +359,15 @@
     padNumber: padNumber,
     setHidden: setHidden,
     formatStageLabel: formatStageLabel,
-    csrfToken: csrfToken,
+    formatDuration: formatDuration,
+    formatDateTime: formatDateTime,
+    formatRelative: formatRelative,
+    setCsrfToken: setCsrfToken,
   };
+
+  Object.defineProperty(window.LF, "csrfToken", {
+    get: function () {
+      return csrfToken;
+    },
+  });
 })();

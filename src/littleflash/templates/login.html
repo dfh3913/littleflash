@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}登录 · 闪词 LittleFlash{% endblock %}
+{% block body_class %}page-auth{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/account.css', v=asset_version) }}">
+{% endblock %}
+{% block account_nav %}{% endblock %}
+{% block header_actions %}
+  <a class="header-link header-link--back" href="{{ url_for('index') }}">
+    <svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
+    <span>返回闪卡</span>
+  </a>
+{% endblock %}
+
+{% block content %}
+<main id="main" class="container auth-main">
+  <section class="auth-card" aria-labelledby="loginTitle">
+    <p class="eyebrow"><span class="eyebrow__line"></span>Sign in</p>
+    <h1 class="auth-title" id="loginTitle">登录闪词</h1>
+    <p class="auth-intro">
+      登录后，学习进度、累计时长和设置都会保存在服务器，换一台设备也能接着学。
+    </p>
+
+    <form class="auth-form" id="loginForm" data-next="{{ next_target }}" novalidate>
+      <div class="form-field">
+        <label class="form-label" for="loginUsername">用户名</label>
+        <input
+          class="form-input"
+          id="loginUsername"
+          name="username"
+          type="text"
+          autocomplete="username"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder="例如 240101"
+          required
+          autofocus
+        >
+      </div>
+
+      <div class="form-field">
+        <label class="form-label" for="loginPassword">密码</label>
+        <div class="password-input">
+          <input
+            class="form-input"
+            id="loginPassword"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="请输入密码"
+            required
+          >
+          <button class="password-reveal" id="passwordReveal" type="button" aria-label="显示密码" title="显示密码">
+            <svg class="icon reveal-on" aria-hidden="true"><use href="#icon-eye"></use></svg>
+            <svg class="icon reveal-off" aria-hidden="true" hidden><use href="#icon-eye-off"></use></svg>
+          </button>
+        </div>
+      </div>
+
+      <p class="form-error" id="loginError" role="alert" hidden></p>
+
+      <button class="primary-action auth-submit" id="loginSubmit" type="submit">
+        <span class="primary-action__spinner" aria-hidden="true"></span>
+        <span class="primary-action__label">登录</span>
+        <svg class="icon primary-action__icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
+      </button>
+    </form>
+
+    <div class="auth-note">
+      <p><strong>第一次来？</strong> 账号由管理员统一分配。默认账号形如 <code>240101</code>，初始密码与用户名相同，登录后建议在“我的学习档案”里修改。</p>
+      <p>忘记密码时，请联系管理员在“用户管理”中重置。</p>
+    </div>
+  </section>
+
+  <aside class="auth-aside" aria-label="登录后可以做什么">
+    <div class="auth-aside__card">
+      <span class="auth-aside__icon" aria-hidden="true"><svg class="icon"><use href="#icon-chart"></use></svg></span>
+      <h2>进度不会丢</h2>
+      <p>学到第几本词书、第几个词、已经累计多少分钟，都会自动记录。</p>
+    </div>
+    <div class="auth-aside__card">
+      <span class="auth-aside__icon auth-aside__icon--lime" aria-hidden="true"><svg class="icon"><use href="#icon-gear"></use></svg></span>
+      <h2>设置跟着你走</h2>
+      <p>词书、显示方向、切换节奏与音量都保存在账号里，换设备也一样。</p>
+    </div>
+    <div class="auth-aside__card">
+      <span class="auth-aside__icon auth-aside__icon--peach" aria-hidden="true"><svg class="icon"><use href="#icon-shield"></use></svg></span>
+      <h2>不登录也能用</h2>
+      <p>不登录时设置只存在这台浏览器，同样可以安静地背单词。</p>
+    </div>
+  </aside>
+</main>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/account.js', v=asset_version) }}"></script>
+{% endblock %}

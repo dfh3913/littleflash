@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}用户管理 · 闪词 LittleFlash{% endblock %}
+{% block body_class %}page-admin{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/account.css', v=asset_version) }}">
+{% endblock %}
+{% block header_actions %}
+  <a class="header-link header-link--back" href="{{ url_for('index') }}">
+    <svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
+    <span>返回闪卡</span>
+  </a>
+{% endblock %}
+
+{% block content %}
+<main
+  id="main"
+  class="container admin-main"
+  data-page="admin"
+  data-can-manage-roles="{{ '1' if can_manage_roles else '0' }}"
+>
+  <section class="account-heading" aria-labelledby="adminTitle">
+    <div>
+      <p class="eyebrow"><span class="eyebrow__line"></span>User management</p>
+      <h1 class="account-title" id="adminTitle">用户管理</h1>
+      <p class="account-intro">
+        查看每个账号的学习进度与累计时长，重置密码或新增账号。
+        {% if not can_manage_roles %}新增账号默认为普通用户；管理员账号只能由超级管理员创建。{% endif %}
+      </p>
+    </div>
+    <div class="account-heading__actions">
+      <button class="outline-button" id="refreshUsers" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
+        刷新数据
+      </button>
+    </div>
+  </section>
+
+  <section class="stat-grid stat-grid--compact" aria-label="站点学习概况">
+    <article class="stat-card">
+      <span class="stat-card__label"><svg class="icon" aria-hidden="true"><use href="#icon-users"></use></svg>账号总数</span>
+      <strong class="stat-card__value" id="summaryTotal">—</strong>
+      <span class="stat-card__hint" id="summaryActive">—</span>
+    </article>
+    <article class="stat-card">
+      <span class="stat-card__label"><svg class="icon" aria-hidden="true"><use href="#icon-spark"></use></svg>今日学习</span>
+      <strong class="stat-card__value" id="summaryToday">—</strong>
+      <span class="stat-card__hint">今天有学习记录的人数</span>
+    </article>
+    <article class="stat-card">
+      <span class="stat-card__label"><svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>有进度账号</span>
+      <strong class="stat-card__value" id="summaryStudied">—</strong>
+      <span class="stat-card__hint" id="summaryAdmins">—</span>
+    </article>
+    <article class="stat-card">
+      <span class="stat-card__label"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>全站学习时长</span>
+      <strong class="stat-card__value" id="summarySeconds">—</strong>
+      <span class="stat-card__hint">所有账号累计</span>
+    </article>
+  </section>
+
+  <section class="account-card" aria-labelledby="createTitle">
+    <header class="account-card__head">
+      <div>
+        <h2 id="createTitle">新增账号</h2>
+        <p>用户名支持字母、数字、下划线、点和连字符，长度 3–32 位。</p>
+      </div>
+      <span class="account-chip account-chip--muted"><svg class="icon" aria-hidden="true"><use href="#icon-plus"></use></svg>Create</span>
+    </header>
+
+    <form class="create-form" id="createUserForm" novalidate autocomplete="off">
+      <div class="form-field">
+        <label class="form-label" for="createUsername">用户名</label>
+        <input class="form-input" id="createUsername" name="username" type="text" placeholder="例如 240901" required>
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="createPassword">初始密码</label>
+        <input class="form-input" id="createPassword" name="password" type="text" placeholder="至少 6 位" required>
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="createDisplayName">备注名（可选）</label>
+        <input class="form-input" id="createDisplayName" name="display_name" type="text" placeholder="例如 三年二班 张三">
+      </div>
+      {% if can_manage_roles %}
+        <div class="form-field">
+          <label class="form-label" for="createRole">角色</label>
+          <div class="select-shell">
+            <select class="form-input" id="createRole" name="role">
+              <option value="user" selected>普通用户</option>
+              <option value="admin">管理员</option>
+              <option value="superadmin">超级管理员</option>
+            </select>
+            <svg class="icon select-chevron" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
+          </div>
+        </div>
+      {% endif %}
+      <div class="create-form__actions">
+        <button class="primary-action" id="createSubmit" type="submit">
+          <span class="primary-action__spinner" aria-hidden="true"></span>
+          <span class="primary-action__label">创建账号</span>
+          <svg class="icon primary-action__icon" aria-hidden="true"><use href="#icon-plus"></use></svg>
+        </button>
+      </div>
+      <p class="form-error" id="createError" role="alert" hidden></p>
+      <p class="form-success" id="createSuccess" role="status" hidden></p>
+    </form>
+  </section>
+
+  <section class="account-card user-card" aria-labelledby="usersTitle">
+    <header class="account-card__head user-card__head">
+      <div>
+        <h2 id="usersTitle">学习进度总览</h2>
+        <p id="usersCaption">正在读取账号…</p>
+      </div>
+      <div class="user-search">
+        <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+        <input id="userSearch" type="search" placeholder="搜索用户名、角色或词书" aria-label="搜索用户">
+      </div>
+    </header>
+
+    <div class="user-table-wrap">
+      <table class="user-table">
+        <thead>
+          <tr>
+            <th scope="col">用户</th>
+            <th scope="col">角色</th>
+            <th scope="col">当前词书</th>
+            <th scope="col">学习进度</th>
+            <th scope="col">累计时长</th>
+            <th scope="col">最近学习</th>
+            <th scope="col"><span class="sr-only">操作</span></th>
+          </tr>
+        </thead>
+        <tbody id="userRows"></tbody>
+      </table>
+      <p class="data-empty" id="userEmpty" hidden>还没有匹配的账号。</p>
+    </div>
+
+    <footer class="user-card__foot">
+      <span id="pageLabel">—</span>
+      <div class="pager">
+        <button class="pager__button" id="prevPage" type="button" aria-label="上一页">
+          <svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
+        </button>
+        <button class="pager__button" id="nextPage" type="button" aria-label="下一页">
+          <svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
+        </button>
+      </div>
+    </footer>
+  </section>
+</main>
+
+<dialog class="account-dialog" id="passwordDialog" aria-labelledby="passwordDialogTitle">
+  <span class="account-dialog__icon" aria-hidden="true"><svg class="icon"><use href="#icon-key"></use></svg></span>
+  <h2 id="passwordDialogTitle">重置密码</h2>
+  <p class="account-dialog__lead" id="passwordDialogLead">为该账号设置新密码。</p>
+
+  <form class="account-dialog__form" id="resetPasswordForm" novalidate>
+    <div class="form-field">
+      <label class="form-label" for="resetPasswordInput">新密码</label>
+      <input class="form-input" id="resetPasswordInput" type="text" autocomplete="off" placeholder="留空则自动生成 8 位随机密码">
+      <p class="form-hint">至少 6 位；留空会生成一个随机密码并显示一次。</p>
+    </div>
+    <p class="form-error" id="resetPasswordError" role="alert" hidden></p>
+    <div class="generated-password" id="generatedPassword" hidden>
+      <span>新密码</span>
+      <code id="generatedPasswordValue"></code>
+      <button class="copy-button" id="copyGeneratedPassword" type="button" title="复制密码">
+        <svg class="icon" aria-hidden="true"><use href="#icon-copy"></use></svg>
+        <span>复制</span>
+      </button>
+    </div>
+    <div class="account-dialog__actions">
+      <button class="outline-button" id="cancelResetPassword" type="button">关闭</button>
+      <button class="primary-action" id="confirmResetPassword" type="submit">
+        <span class="primary-action__spinner" aria-hidden="true"></span>
+        <span class="primary-action__label">重置密码</span>
+      </button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/account.js', v=asset_version) }}"></script>
+{% endblock %}

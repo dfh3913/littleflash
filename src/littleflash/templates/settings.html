@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}设置 · 闪词 LittleFlash{% endblock %}
 {% block meta %}
-  <meta name="csrf-token" content="{{ csrf_token }}">
-  <meta name="settings-mode" content="{{ 'server' if authenticated else 'local' }}">
+  <meta name="settings-mode" content="{{ 'server' if scope != 'local' else 'local' }}">
+  <meta name="settings-scope" content="{{ scope }}">
 {% endblock %}
 {% block body_class %}page-settings{% endblock %}
 {% block styles %}
@@ -24,61 +24,58 @@
 
 {% block content %}
 <main id="main" class="container settings-main">
-  <div class="mode-banner" data-mode="{{ 'server' if authenticated else 'local' }}">
+  <div class="mode-banner" data-mode="{{ scope }}">
     <span class="mode-banner__icon" aria-hidden="true">
-      <svg class="icon"><use href="#icon-{{ 'shield' if authenticated else 'spark' }}"></use></svg>
+      <svg class="icon"><use href="#icon-{{ 'shield' if scope == 'site' else ('check' if authenticated else 'spark') }}"></use></svg>
     </span>
     <div class="mode-banner__text">
-      {% if authenticated %}
-        <strong>已登录 · 更改会写入服务器</strong>
-        <p>这些设置对所有访问者生效。退出登录后，本浏览器会回到它自己的本地设置。</p>
+      {% if scope == 'site' %}
+        <strong>站点默认设置 · 影响所有未登录访客</strong>
+        <p>这里的修改会写入服务器，未登录的人打开闪词时会使用这份默认值。已登录用户仍使用自己的设置。</p>
+      {% elif authenticated %}
+        <strong>已登录 · 设置会保存到你的账号</strong>
+        <p>这些设置只属于 <b>{{ account.username }}</b>，换设备登录后同样生效，不会影响其他账号。</p>
       {% else %}
-        <strong>本地模式 · 无需密码即可调整</strong>
-        <p>更改只保存在这台设备的浏览器里，不影响其他人，也不会写入服务器配置。</p>
+        <strong>本地模式 · 无需登录即可调整</strong>
+        <p>更改只保存在这台设备的浏览器里，不影响其他人，也不会写入服务器。登录后可以保存到账号。</p>
       {% endif %}
     </div>
-    {% if authenticated %}
-      <span class="mode-badge">服务器</span>
+    {% if scope == 'site' %}
+      <a class="outline-button mode-banner__action" href="{{ url_for('settings_page') }}">
+        <svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
+        <span>返回我的设置</span>
+      </a>
+    {% elif authenticated %}
+      {% if account.is_superadmin %}
+        <a class="outline-button mode-banner__action" href="{{ url_for('settings_page', scope='site') }}">
+          <svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>
+          <span>站点默认</span>
+        </a>
+      {% endif %}
+      <span class="mode-badge">{{ account.role_label }}</span>
     {% else %}
-      <button class="outline-button mode-banner__action" id="toggleLogin" type="button" aria-expanded="false" aria-controls="adminLogin">
+      <a class="outline-button mode-banner__action" id="toggleLogin" href="{{ url_for('login_page', next='settings_page') }}">
         <svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg>
-        <span>管理员登录</span>
-      </button>
+        <span>登录</span>
+      </a>
     {% endif %}
   </div>
-
-  {% if not authenticated %}
-  <section class="admin-login" id="adminLogin" aria-label="管理员登录" hidden>
-    <form id="loginForm" class="login-form" novalidate>
-      <div class="admin-login__field">
-        <label class="field-label" for="settingsPassword">访问密码</label>
-        <div class="password-field">
-          <input id="settingsPassword" name="password" type="password" autocomplete="current-password" placeholder="登录后可修改全站默认设置" required aria-describedby="loginError">
-          <button class="password-reveal" id="passwordReveal" type="button" aria-label="显示密码" title="显示密码">
-            <svg class="icon reveal-on" aria-hidden="true"><use href="#icon-eye"></use></svg>
-            <svg class="icon reveal-off" aria-hidden="true" hidden><use href="#icon-eye-off"></use></svg>
-          </button>
-        </div>
-      </div>
-      <button class="login-submit primary-action" id="loginSubmit" type="submit">
-        <span class="primary-action__spinner" aria-hidden="true"></span>
-        <span class="primary-action__label">登录</span>
-        <svg class="icon primary-action__icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
-      </button>
-      <p class="form-error" id="loginError" role="alert" hidden></p>
-    </form>
-    <p class="admin-login__note">
-      <svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>
-      密码保存在服务器 <code>config.yml</code>，只用于修改全站默认设置；连续错误会暂时锁定。
-    </p>
-  </section>
-  {% endif %}
 
   <section class="settings-heading" aria-labelledby="settingsTitle">
     <div>
       <p class="eyebrow"><span class="eyebrow__line"></span>Learning settings</p>
-      <h1 class="settings-title" id="settingsTitle">学习设置</h1>
-      <p class="settings-intro">调整词书、闪示节奏和声音。{% if authenticated %}所有更改会自动保存到服务器。{% else %}所有更改会自动保存在本机浏览器。{% endif %}</p>
+      <h1 class="settings-title" id="settingsTitle">
+        {% if scope == 'site' %}站点默认学习设置{% else %}学习设置{% endif %}
+      </h1>
+      <p class="settings-intro">
+        {% if scope == 'site' %}
+          调整词书、闪示节奏和声音，作为未登录访客的默认值。
+        {% elif authenticated %}
+          调整词书、闪示节奏和声音，所有更改会自动保存到你的账号。
+        {% else %}
+          调整词书、闪示节奏和声音，所有更改会自动保存在本机浏览器。
+        {% endif %}
+      </p>
     </div>
     <div class="save-status" id="saveStatus" data-state="saved" role="status" aria-live="polite">
       <span class="save-status__icon" aria-hidden="true">
@@ -86,7 +83,9 @@
         <svg class="save-icon save-icon--spinner"><use href="#icon-loader"></use></svg>
         <svg class="save-icon save-icon--error"><use href="#icon-close"></use></svg>
       </span>
-      <span id="saveStatusText">{% if authenticated %}所有更改已保存{% else %}已保存到本机{% endif %}</span>
+      <span id="saveStatusText">
+        {% if scope == 'site' %}站点默认已保存{% elif authenticated %}已保存到我的账号{% else %}已保存到本机{% endif %}
+      </span>
       <button class="save-retry" id="saveRetry" type="button" hidden>重试</button>
     </div>
   </section>
@@ -284,7 +283,7 @@
         </button>
       </section>
 
-      <p class="form-footnote"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>{% if authenticated %}更改会自动保存到服务器，对所有访问者生效；设置页密码与服务器密钥不会被写入浏览器存储。{% else %}更改会自动保存在本机浏览器（localStorage），不会上传服务器，也不会影响其他人。{% endif %}</p>
+      <p class="form-footnote"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>{% if scope == 'site' %}保存后会成为所有未登录访客的默认设置；已登录账号不受影响。{% elif authenticated %}更改自动保存到你的账号（{{ account.username }}），不影响其他用户；密码哈希与服务器密钥不会写入浏览器。{% else %}更改自动保存在本机浏览器（localStorage），不会上传服务器，也不会影响其他人。{% endif %}</p>
     </form>
 
     <aside class="settings-aside" aria-label="设置预览">
@@ -325,7 +324,7 @@
   <dialog class="confirm-dialog" id="resetDialog" aria-labelledby="resetDialogTitle">
     <span class="confirm-dialog__icon" aria-hidden="true"><svg class="icon"><use href="#icon-refresh"></use></svg></span>
     <h2 id="resetDialogTitle">恢复默认设置？</h2>
-    <p>{% if authenticated %}词书、显示方向、切换节奏与声音都会回到初始状态。此操作无法撤销。{% else %}会清除本机浏览器保存的设置，回到站点默认值。{% endif %}</p>
+    <p>{% if scope == 'site' %}词书、显示方向、切换节奏与声音都会回到初始状态，并影响所有未登录访客。此操作无法撤销。{% elif authenticated %}词书、显示方向、切换节奏与声音都会回到初始状态，只影响你的账号。此操作无法撤销。{% else %}会清除本机浏览器保存的设置，回到站点默认值。{% endif %}</p>
     <div class="confirm-dialog__actions">
       <button class="outline-button" id="cancelReset" type="button">取消</button>
       <button class="danger-button" id="confirmReset" type="button">恢复默认</button>

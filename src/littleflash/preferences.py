@@ -1,38 +1,37 @@
-"""Persistent study preferences.
+"""学习偏好：校验规则 + SQLite 持久化。
 
-These are intentionally separate from config.yml: they can be edited from the
-password-protected settings page, while the YAML file remains the place for
-server/deployment secrets.  Writes are atomic and file-locked so multiple
-gunicorn workers cannot corrupt the JSON state.
+偏好按 ``owner`` 分片保存：
+- ``anonymous``：未登录访客看到/使用的站点默认值（超级管理员可改）；
+- ``user:<id>``：登录用户自己的设置。
 """
 
 from __future__ import annotations
 
-import json
-import logging
-import os
-import tempfile
-import threading
-from contextlib import contextmanager
+import sqlite3
+import time
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
+from .db import ANONYMOUS_OWNER, connect
 from .wordbooks import WordbookManager
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Linux is the supported deployment
-    fcntl = None  # type: ignore[assignment]
-
-logger = logging.getLogger(__name__)
-
-MAX_STATE_BYTES = 64 * 1024
 
 FRONTS = ("en", "zh")
 ORDERS = ("sequence", "shuffle")
 MODES = ("auto", "manual")
 MIN_INTERVAL = 1.0
 MAX_INTERVAL = 30.0
+
+# 偏好字典键 -> 数据表列名（order 是 SQL 关键字，列名用 sort_order）
+_COLUMNS = {
+    "wordbook_id": "wordbook_id",
+    "unit_id": "unit_id",
+    "front": "front",
+    "order": "sort_order",
+    "mode": "mode",
+    "interval_seconds": "interval_seconds",
+    "audio_enabled": "audio_enabled",
+    "audio_volume": "audio_volume",
+}
 
 
 class SettingsValidationError(ValueError):
@@ -184,104 +183,85 @@ def validate_update(
     return public_preferences(merged, manager)
 
 
-class SettingsStore:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._thread_lock = threading.RLock()
+def _row_to_preferences(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "wordbook_id": row["wordbook_id"],
+        "unit_id": row["unit_id"],
+        "front": row["front"],
+        "order": row["sort_order"],
+        "mode": row["mode"],
+        "interval_seconds": float(row["interval_seconds"]),
+        "audio_enabled": bool(row["audio_enabled"]),
+        "audio_volume": float(row["audio_volume"]),
+    }
 
-    def load(self, manager: WordbookManager) -> dict[str, Any]:
-        with self._thread_lock:
-            raw = self._read_json()
-            return public_preferences(raw, manager)
+
+class PreferenceStore:
+    """按 owner 读写偏好；写入前统一走 ``validate_update``。"""
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+
+    def load(self, owner: str, manager: WordbookManager) -> dict[str, Any]:
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM preferences WHERE owner = ?", (owner,)
+            ).fetchone()
+        raw = _row_to_preferences(row) if row else None
+        return public_preferences(raw, manager)
 
     def update(
         self,
+        owner: str,
         patch: Any,
         manager: WordbookManager,
     ) -> dict[str, Any]:
-        with self._thread_lock, self._file_lock():
-            current = public_preferences(self._read_json(), manager)
-            updated = validate_update(patch, current, manager)
-            self._write_json(updated)
-            return updated
+        current = self.load(owner, manager)
+        updated = validate_update(patch, current, manager)
+        self._write(owner, updated)
+        return public_preferences(updated, manager)
 
     def replace(
         self,
+        owner: str,
         value: dict[str, Any],
         manager: WordbookManager,
     ) -> dict[str, Any]:
-        with self._thread_lock, self._file_lock():
-            normalized = validate_update(value, default_preferences(manager), manager)
-            self._write_json(normalized)
-            return normalized
+        normalized = validate_update(value, default_preferences(manager), manager)
+        self._write(owner, normalized)
+        return normalized
 
-    def reset(self, manager: WordbookManager) -> dict[str, Any]:
+    def reset(self, owner: str, manager: WordbookManager) -> dict[str, Any]:
         defaults = default_preferences(manager)
-        if not manager.books():
-            return defaults
-        with self._thread_lock, self._file_lock():
-            self._write_json(defaults)
+        self._write(owner, defaults)
         return defaults
 
-    # ------------------------------------------------------------- internals
-    def _read_json(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return {}
-        try:
-            if self.path.stat().st_size > MAX_STATE_BYTES:
-                logger.warning("设置文件异常过大，已使用默认值：%s", self.path)
-                return {}
-            with self.path.open("r", encoding="utf-8") as handle:
-                value = json.load(handle)
-            return value if isinstance(value, dict) else {}
-        except (OSError, ValueError) as exc:
-            logger.warning("读取设置文件失败，已使用默认值：%s", exc)
-            return {}
-
-    def _write_json(self, value: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        payload = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
-        temporary: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=self.path.parent,
-                prefix=f".{self.path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temporary = handle.name
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, self.path)
-            temporary = None
-        except OSError as exc:
-            raise SettingsValidationError(f"保存设置失败：{exc}") from exc
-        finally:
-            if temporary is not None:
-                try:
-                    os.unlink(temporary)
-                except OSError:
-                    pass
-
-    @contextmanager
-    def _file_lock(self) -> Iterator[None]:
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        lock_path = self.path.with_name(f".{self.path.name}.lock")
-        lock_handle = lock_path.open("a+", encoding="utf-8")
-        try:
-            if fcntl is not None:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-            yield
-        finally:
-            try:
-                if fcntl is not None:
-                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-            finally:
-                lock_handle.close()
+    def _write(self, owner: str, value: dict[str, Any]) -> None:
+        now = int(time.time())
+        columns = ", ".join(_COLUMNS.values())
+        placeholders = ", ".join("?" for _ in _COLUMNS)
+        updates = ", ".join(f"{column} = excluded.{column}" for column in _COLUMNS.values())
+        params = [
+            value.get("wordbook_id", ""),
+            value.get("unit_id", "all"),
+            value.get("front", "en"),
+            value.get("order", "sequence"),
+            value.get("mode", "auto"),
+            float(value.get("interval_seconds", 4.0)),
+            1 if value.get("audio_enabled", True) else 0,
+            float(value.get("audio_volume", 0.8)),
+        ]
+        with connect(self.db_path) as conn:
+            conn.execute(
+                f"""
+                INSERT INTO preferences (owner, {columns}, updated_at)
+                VALUES (?, {placeholders}, ?)
+                ON CONFLICT(owner) DO UPDATE SET
+                    {updates},
+                    updated_at = excluded.updated_at
+                """,
+                [owner, *params, now],
+            )
 
 
 def sample_word(
@@ -316,3 +296,24 @@ def _safe_float(value: Any, default: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
     return float(value)
+
+
+def owner_for_user(user_id: int) -> str:
+    return f"user:{user_id}"
+
+
+__all__ = [
+    "ANONYMOUS_OWNER",
+    "FRONTS",
+    "MAX_INTERVAL",
+    "MIN_INTERVAL",
+    "MODES",
+    "ORDERS",
+    "PreferenceStore",
+    "SettingsValidationError",
+    "default_preferences",
+    "owner_for_user",
+    "public_preferences",
+    "sample_word",
+    "validate_update",
+]

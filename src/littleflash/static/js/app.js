@@ -83,6 +83,15 @@
     audioAttempt: 0,
     documentHidden: document.hidden,
     interactionSeen: false,
+    account: null,
+    progress: null,
+    progressTimer: null,
+    progressBound: false,
+    progressTickAt: 0,
+    progressDirty: false,
+    progressSending: false,
+    progressDebounce: null,
+    resumeNotice: false,
   };
 
   const audio = new Audio();
@@ -111,6 +120,7 @@
     state.audioBlocked = false;
     state.audioErrorShown = false;
     state.currentAudioWord = null;
+    state.progressTickAt = 0;
 
     showLoadingCard();
     setControlsEnabled(false);
@@ -124,6 +134,8 @@
       state.books = bootstrap.books;
       state.prefs = bootstrap.preferences || {};
       state.serverAuthenticated = Boolean(bootstrap.authenticated);
+      state.account = bootstrap.user || null;
+      state.progress = bootstrap.progress || null;
       // 未登录时优先使用这台浏览器自己的设置（设置页免密码保存的那一份）。
       if (!state.serverAuthenticated) {
         const localPrefs = LF.localPrefs.read();
@@ -174,6 +186,7 @@
 
       state.face = 0;
       state.round = 1;
+      restoreProgressPosition();
       state.ready = true;
 
       setupPage();
@@ -186,6 +199,12 @@
       updatePlayerUI();
       setLibraryStatus("ready", state.books.length + " 本词书在线");
       document.title = "闪词 · " + state.book.title;
+
+      startProgressTracking();
+      if (state.resumeNotice) {
+        state.resumeNotice = false;
+        LF.toast("已回到上次学到的地方。", { type: "success", duration: 2400 });
+      }
 
       scheduleAuto();
       window.setTimeout(function () {
@@ -207,6 +226,135 @@
     state.intervalSeconds = clampNumber(prefs.interval_seconds, 1, 30, 4);
     state.kindOrder = prefs.front === "zh" ? ["zh", "en"] : ["en", "zh"];
     state.autoRunning = state.mode === "auto";
+  }
+
+  /* 服务端保存的学习进度：回到上次的词与轮次。 */
+  function restoreProgressPosition() {
+    const saved = state.progress;
+    if (!saved || !state.book) return;
+    if (saved.wordbookId !== state.book.id) return;
+    const currentUnit =
+      state.prefs && state.prefs.unit_id ? String(state.prefs.unit_id) : "all";
+    if ((saved.unitId || "all") !== currentUnit) return;
+
+    let index = -1;
+    if (saved.wordEn) {
+      for (let i = 0; i < state.deck.length; i += 1) {
+        if (state.deck[i].en === saved.wordEn) {
+          index = i;
+          break;
+        }
+      }
+    }
+    if (index < 0) {
+      const stored = Number(saved.wordIndex);
+      if (isFinite(stored) && stored >= 0 && stored < state.deck.length) {
+        index = Math.floor(stored);
+      }
+    }
+    if (index >= 0) {
+      state.index = index;
+      state.resumeNotice = true;
+    }
+    const rounds = Number(saved.rounds);
+    if (isFinite(rounds) && rounds >= 1) {
+      state.round = Math.floor(rounds);
+    }
+  }
+
+  /* 登录用户每 12 秒同步一次学习时长；切词时额外补一次。 */
+  function startProgressTracking() {
+    if (!state.account) return;
+    state.progressTickAt = Date.now();
+    window.clearInterval(state.progressTimer);
+    state.progressTimer = window.setInterval(function () {
+      flushProgress(false);
+    }, 12000);
+
+    if (state.progressBound) return;
+    state.progressBound = true;
+    window.addEventListener("pagehide", function () {
+      flushProgress(true);
+    });
+    document.addEventListener("visibilitychange", function () {
+      state.documentHidden = document.hidden;
+      if (document.hidden) {
+        flushProgress(true);
+      } else {
+        state.progressTickAt = Date.now();
+        if (state.ready && state.autoRunning) scheduleAuto();
+      }
+    });
+  }
+
+  function noteProgress() {
+    if (!state.account || !state.ready) return;
+    state.progressDirty = true;
+    window.clearTimeout(state.progressDebounce);
+    state.progressDebounce = window.setTimeout(function () {
+      flushProgress(false);
+    }, 1400);
+  }
+
+  function flushProgress(keepalive) {
+    if (!state.account || !state.ready || state.progressSending) return;
+    const word = currentWord();
+    if (!word || !state.book) return;
+
+    const nowMs = Date.now();
+    const base = state.progressTickAt || nowMs;
+    state.progressTickAt = nowMs;
+    let delta = Math.floor((nowMs - base) / 1000);
+    if (document.hidden || delta < 0) delta = 0;
+    if (delta > 600) delta = 600;
+    if (delta === 0 && !state.progressDirty) return;
+
+    const body = {
+      wordbook_id: state.book.id,
+      unit_id: (state.prefs && state.prefs.unit_id) || "all",
+      word_index: state.index,
+      word_en: word.en,
+      rounds: state.round,
+      seconds_delta: delta,
+    };
+    state.progressDirty = false;
+    state.progressSending = true;
+    postProgress(body, keepalive).then(function () {
+      state.progressSending = false;
+    });
+  }
+
+  function postProgress(body, keepalive) {
+    const headers = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+    if (LF.csrfToken) headers["X-CSRF-Token"] = LF.csrfToken;
+    try {
+      return fetch(LF.url("/api/progress"), {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify(body),
+        credentials: "same-origin",
+        cache: "no-store",
+        keepalive: Boolean(keepalive),
+      })
+        .then(function (response) {
+          if (response.status === 401) {
+            // 会话过期：停止上报，避免每 12 秒产生一次失败请求。
+            window.clearInterval(state.progressTimer);
+            state.progressTimer = null;
+            state.account = null;
+            state.serverAuthenticated = false;
+          }
+          return null;
+        })
+        .catch(function () {
+          return null;
+        });
+    } catch (error) {
+      return Promise.resolve(null);
+    }
   }
 
   function prepareDeck() {
@@ -394,6 +542,7 @@
     updatePlayerUI();
     attemptPlayAudio();
     scheduleAuto();
+    noteProgress();
   }
 
   function previousWord() {
@@ -407,6 +556,7 @@
     updatePlayerUI();
     attemptPlayAudio();
     scheduleAuto();
+    noteProgress();
   }
 
   function toggleAutoplay() {

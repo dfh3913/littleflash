@@ -7,143 +7,7 @@
     return document.getElementById(id);
   };
 
-  initLogin();
   initSettings();
-
-  /* =====================================================================
-     Password gate
-     ===================================================================== */
-  function initLogin() {
-    const form = $("loginForm");
-    if (!form) return;
-
-    const input = $("settingsPassword");
-    const reveal = $("passwordReveal");
-    const error = $("loginError");
-    const submit = $("loginSubmit");
-    const submitLabel = submit ? submit.querySelector(".primary-action__label") : null;
-    let busy = false;
-    let lockTimer = null;
-    let lockUntil = 0;
-
-    if (reveal) {
-      reveal.addEventListener("click", function () {
-        const show = input.type === "password";
-        input.type = show ? "text" : "password";
-        reveal.setAttribute("aria-label", show ? "隐藏密码" : "显示密码");
-        reveal.title = show ? "隐藏密码" : "显示密码";
-        const on = reveal.querySelector(".reveal-on");
-        const off = reveal.querySelector(".reveal-off");
-        LF.setHidden(on, show);
-        LF.setHidden(off, !show);
-        input.focus();
-      });
-    }
-
-    if (input) {
-      input.addEventListener("input", function () {
-        hideError();
-      });
-      window.setTimeout(function () {
-        input.focus({ preventScroll: true });
-      }, 250);
-    }
-
-    form.addEventListener("submit", async function (event) {
-      event.preventDefault();
-      if (busy) return;
-      if (Date.now() < lockUntil) {
-        updateLockMessage();
-        return;
-      }
-      const password = input ? input.value : "";
-      if (!password) {
-        showError("请输入设置密码");
-        if (input) input.focus();
-        return;
-      }
-
-      busy = true;
-      hideError();
-      LF.setLoading(submit, true);
-      if (submitLabel) submitLabel.textContent = "正在验证";
-      try {
-        await LF.api("/api/auth/login", {
-          method: "POST",
-          body: { password: password },
-          timeout: 12000,
-        });
-        if (submitLabel) submitLabel.textContent = "验证成功";
-        window.location.reload();
-      } catch (requestError) {
-        handleLoginError(requestError);
-        busy = false;
-        LF.setLoading(submit, false);
-        if (submitLabel) submitLabel.textContent = "解锁设置";
-        if (Date.now() < lockUntil && submit) submit.disabled = true;
-        if (input) {
-          input.focus();
-          input.select();
-        }
-      }
-    });
-
-    function handleLoginError(requestError) {
-      if (!requestError) {
-        showError("验证失败，请稍后再试");
-        return;
-      }
-      showError(requestError.message || "验证失败，请稍后再试");
-      if (requestError.status === 429) {
-        const seconds = Math.max(1, Number(requestError.retryAfter) || 30);
-        startLock(seconds);
-      } else if (
-        requestError.code === "csrf_failed" ||
-        (requestError.status === 400 && /令牌/.test(requestError.message || ""))
-      ) {
-        showError("页面安全令牌已过期，即将为你刷新…");
-        window.setTimeout(function () {
-          window.location.reload();
-        }, 1400);
-      }
-    }
-
-    function showError(message) {
-      if (!error) return;
-      error.textContent = message;
-      error.hidden = false;
-    }
-
-    function hideError() {
-      if (!error) return;
-      error.hidden = true;
-      error.textContent = "";
-    }
-
-    function startLock(seconds) {
-      lockUntil = Date.now() + seconds * 1000;
-      if (submit) submit.disabled = true;
-      updateLockMessage();
-      window.clearInterval(lockTimer);
-      lockTimer = window.setInterval(function () {
-        if (Date.now() >= lockUntil) {
-          window.clearInterval(lockTimer);
-          if (submit) submit.disabled = false;
-          hideError();
-        } else {
-          updateLockMessage();
-        }
-      }, 1000);
-    }
-
-    function updateLockMessage() {
-      const remaining = Math.max(0, Math.ceil((lockUntil - Date.now()) / 1000));
-      if (remaining > 0) {
-        showError("尝试次数过多，请在 " + remaining + " 秒后重试");
-        if (submit) submit.disabled = true;
-      }
-    }
-  }
 
   /* =====================================================================
      Settings form
@@ -187,17 +51,19 @@
       previewCaption: $("previewCaption"),
       previewProgress: $("previewProgress"),
       previewSound: $("previewSound"),
-      toggleLogin: $("toggleLogin"),
-      adminLogin: $("adminLogin"),
     };
 
     const modeMeta = document.querySelector('meta[name="settings-mode"]');
-    const localMode =
-      !modeMeta || modeMeta.getAttribute("content") !== "server";
+    const scopeMeta = document.querySelector('meta[name="settings-scope"]');
+    const scope = scopeMeta
+      ? scopeMeta.getAttribute("content") || "local"
+      : "local";
+    const localMode = scope === "local" || !modeMeta;
 
     const state = {
       hasBooks: Boolean(dom.wordbook && dom.wordbook.options.length > 0),
       localMode: localMode,
+      scope: localMode ? "local" : scope,
       saving: false,
       hasUnsaved: false,
       saveFailed: false,
@@ -240,7 +106,13 @@
     }
 
     function savedLabel() {
-      return state.localMode ? "已保存到本机" : "所有更改已保存";
+      if (state.localMode) return "已保存到本机";
+      if (state.scope === "site") return "站点默认已保存";
+      return "已保存到我的账号";
+    }
+
+    function settingsEndpoint() {
+      return state.scope === "site" ? "/api/settings?scope=site" : "/api/settings";
     }
 
     /* 本机存储里的设置优先于服务端默认值，仅影响当前浏览器。 */
@@ -389,22 +261,6 @@
 
       if (dom.logoutBtn) {
         dom.logoutBtn.addEventListener("click", handleLogout);
-      }
-
-      if (dom.toggleLogin && dom.adminLogin) {
-        dom.toggleLogin.addEventListener("click", function () {
-          const open = dom.adminLogin.hidden;
-          dom.adminLogin.hidden = !open;
-          dom.toggleLogin.setAttribute("aria-expanded", open ? "true" : "false");
-          if (open) {
-            const input = $("settingsPassword");
-            if (input) {
-              window.setTimeout(function () {
-                input.focus({ preventScroll: true });
-              }, 40);
-            }
-          }
-        });
       }
 
       document.addEventListener("visibilitychange", function () {
@@ -846,7 +702,7 @@
       state.saving = true;
 
       try {
-        const result = await LF.api("/api/settings", {
+        const result = await LF.api(settingsEndpoint(), {
           method: "PUT",
           body: payload,
           timeout: 16000,
@@ -876,11 +732,11 @@
     function handleSaveError(error) {
       if (error && error.status === 401) {
         setSaveStatus("error", "登录已过期");
-        LF.toast("登录已过期，正在返回密码验证页…", {
+        LF.toast("登录已过期，正在前往登录页…", {
           type: "error",
           duration: 3200,
         });
-        redirectSoon(LF.url("/settings"));
+        redirectSoon(LF.url("/login?next=settings_page"));
         return;
       }
       if (error && error.code === "csrf_failed") {
@@ -989,10 +845,15 @@
       dom.cancelReset.disabled = true;
       dom.confirmReset.textContent = "正在恢复…";
       try {
-        const result = await LF.api("/api/settings/reset", {
-          method: "POST",
-          timeout: 12000,
-        });
+        const result = await LF.api(
+          state.scope === "site"
+            ? "/api/settings/reset?scope=site"
+            : "/api/settings/reset",
+          {
+            method: "POST",
+            timeout: 12000,
+          }
+        );
         if (!result || !result.ok) {
           throw new LF.ApiError("恢复默认设置失败", 0, "reset_failed");
         }

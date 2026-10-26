@@ -1,149 +1,157 @@
 # 闪词 · LittleFlash
 
-> 一眼，入心。  
-> 一个安静、好看的单词闪卡网页，带 Python 后端与 nginx 部署方案。
+一款安静、顺手的单词闪卡网页：从 `src/wordbooks` 动态读取词书，按你设定的方向、顺序与节奏在英文/中文之间切换；登录后还能把学习进度、学习时长与设置保存到服务器，换一台设备也能接着学。
 
-LittleFlash 从 `src/wordbooks` 动态读取词书，按你设定的方向、顺序与频率在英文/中文之间切换；可以在词面显示时朗读，也可以在释义显示时再朗读一遍。所有学习偏好保存在服务端，设置页由 `config.yml` 中的独立密码保护。
+- 后端：Flask 3 + SQLite（WAL），无外部数据库依赖
+- 前端：原生 JavaScript + CSS，无构建步骤
+- 数据：账号、偏好、学习进度、站点设置全部存放在 `data/littleflash.db`
 
 ## 功能
 
-- **双面闪卡**：先英后中，或先中后英；英文面显示单词与音标。
-- **自动 / 手动节奏**：自动模式按 1–30 秒（0.5 秒步进）停留并切换；手动模式点击卡片、按钮或按空格翻面。
-- **词书动态识别**：启动后仍可新增、删除或修改 `src/wordbooks/*.json`，无需重启；支持子目录。
-- **独立学习范围**：词书、单元、显示方向、顺序（词书顺序 / 随机打乱）、节奏与发音分别设置。
-- **有道单词发音**：英文面与中文面都会自动朗读；后端代理并缓存网易有道词典音频，不把用户 IP 直接交给第三方。
-- **免密码本地设置**：`/settings` 打开即可调整，默认只把偏好写进当前浏览器的 localStorage，不影响其他人、也不写服务器配置；需要改全站默认值时才用 `config.yml` 里的密码登录。
-- **简洁的响应式界面**：居中闪卡布局，桌面到手机自动适配；内置 Fraunces / Manrope 字体，无需访问 Google Fonts。
-- **适合 nginx 反代**：标准 Flask WSGI 应用，附 gunicorn 与 nginx 示例。
-
-## 目录结构
-
-```text
-LittleFlash/
-├── config.yml                   # 主配置（设置页密码在这里）
-├── pyproject.toml
-├── src/
-│   ├── littleflash/             # Flask 后端、模板、静态资源
-│   │   ├── app.py
-│   │   ├── audio.py             # 有道发音代理 + 磁盘缓存
-│   │   ├── config.py
-│   │   ├── preferences.py       # 原子写入的学习偏好
-│   │   ├── security.py          # 密码校验与登录限流
-│   │   ├── wordbooks.py         # 动态词书发现与校验
-│   │   ├── static/
-│   │   └── templates/
-│   └── wordbooks/               # 词书目录（可在 config.yml 改）
-├── data/                        # 运行时生成：偏好、会话密钥
-├── .cache/audio/                # 有道发音缓存
-├── deploy/
-│   ├── nginx.conf
-│   └── littleflash.service
-└── tests/
-```
+- **闪卡学习**：自动/手动切换，可调 1–30 秒间隔；按词书顺序或随机乱序（每完成一轮重新打乱）。
+- **词书管理**：把 JSON 放进 `src/wordbooks` 即自动识别，可按整本或单个单元学习。
+- **发音**：调用有道词典音频并由后端缓存，前端控制音量与开关。
+- **用户账号**：内置 440 个默认账号 + `admin` + `telecomadmin`，支持改密、新增、停用。
+- **学习进度**：记录词书、单元、第几个词、轮次、累计时长与最近学习时间，首页自动续学。
+- **个人设置**：每个账号独立保存词书、方向、顺序、节奏、音量，互不影响。
+- **游客模式**：不登录也能调整设置，偏好只写进当前浏览器的 localStorage。
+- **站点默认值**：超级管理员可修改未登录访客看到的默认设置。
+- **用户管理**：管理员可查看所有人的进度、重置密码、新增账号；超级管理员还能创建管理员、停用账号。
 
 ## 快速开始
 
-需要 Python 3.11+。推荐使用 [uv](https://docs.astral.sh/uv/)：
-
 ```bash
+# 任选其一
 uv sync
-
-# 第一次运行前，请修改 config.yml 中的 settings.password
-uv run python -m littleflash
+# 或
+python -m venv .venv && .venv/bin/pip install -e .
 ```
 
-打开：
-
-- 闪卡首页：<http://127.0.0.1:8000/>
-- 设置页：<http://127.0.0.1:8000/settings>
-
-也可以使用 venv + pip：
+启动：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-littleflash
+# 开发模式（Flask 内置服务器）
+.venv/bin/python -m littleflash
+
+# 生产入口（内置 gunicorn，1 worker + 4 threads）
+.venv/bin/python deploy/LittleFlash.py
 ```
 
-默认只监听 `127.0.0.1:8000`，适合由 nginx 反代；本机调试也可以直接访问。生产环境不要使用 Flask 开发服务器。
+首次启动会自动创建 `data/littleflash.db`：建表、写入站点默认设置，并生成初始账号。终端会打印随机生成的管理员密码，同时写入 `data/initial-accounts.txt`（权限 600，登录后请尽快修改密码并妥善保管）。
 
-## 配置 `config.yml`
+默认访问：
 
-| 键 | 说明 |
-| --- | --- |
-| `app.host` / `app.port` | 开发服务器监听地址与端口；默认只监听本机。 |
-| `app.debug` | 生产环境必须为 `false`。 |
-| `app.session_hours` | 设置页登录有效期，默认 2 小时。 |
-| `app.secret_key` | 可选。留空时自动生成到 `data/.secret_key`（权限 600）。 |
-| `wordbooks.directory` | 词书目录，相对路径以 `config.yml` 所在目录为基准。 |
-| `wordbooks.auto_reload` | 是否自动感知词书增删改。 |
-| `wordbooks.max_file_size_kb` / `max_books` | 防止异常大文件拖垮服务。 |
-| `settings.password` | 设置页访问密码，只存在服务器端。 |
-| `settings.password_hash` | 可选，Werkzeug 密码哈希；设置后优先生效。 |
-| `settings.state_file` | 学习偏好 JSON 的保存路径。 |
-| `audio.enabled` | 是否启用有道发音代理。 |
-| `audio.type` | 有道发音类型，1 美音 / 2 英音。 |
-| `audio.cache_dir` / `cache_ttl_hours` | 音频缓存目录与有效期。 |
-| `security.trust_proxy_headers` | 部署在 nginx 后设为 `true`，以正确识别客户端 IP 和 HTTPS。 |
-| `security.cookie_secure` | 全站启用 HTTPS 后改为 `true`。 |
-| `security.login_*` | 登录失败次数、统计窗口与锁定时长。 |
+- 学习页：<http://127.0.0.1:4570/>
+- 登录：<http://127.0.0.1:4570/login>
+- 设置：<http://127.0.0.1:4570/settings>
+- 学习档案：<http://127.0.0.1:4570/account>
+- 用户管理：<http://127.0.0.1:4570/admin>
 
-### 两种设置模式
+## 账号体系
 
-| 模式 | 进入方式 | 保存位置 | 影响范围 |
-| --- | --- | --- | --- |
-| 本地模式（默认） | 直接打开 `/settings` | 浏览器 `localStorage` | 仅当前浏览器 |
-| 服务器模式 | 页面上点「管理员登录」并输入密码 | `settings.state_file` | 所有访客的默认值 |
+### 初始账号
 
-- 未登录时表单照样可用，改完立即写入本机；刷新后仍是自己的设置，换一台设备或换浏览器则互不影响。
-- 未登录时的任何修改都不会调用写接口，`/api/settings` 仍然要求密码 + CSRF，因此不会污染别人的设置。
-- 本机设置优先于服务器默认值；一旦登录，页面改用服务器设置，退出登录后回到自己的本地设置。
-- 「恢复默认」在本地模式下只清除本机存储，服务器设置不受影响。
+| 账号                  | 角色    | 初始密码                   |
+| ------------------- | ----- | ---------------------- |
+| `240101` … `240855` | 普通用户  | 与用户名相同（共 8×55 = 440 个） |
+| `admin`             | 管理员   | 随机 8 位字母数字             |
+| `telecomadmin`      | 超级管理员 | 随机 8 位字母数字             |
 
-### 修改设置页密码
+- 用户名规则：`240` + 一位组号（1–8）+ 两位序号（01–55），例如 `240101`、`240155`、`240801`、`240855`。
+- 随机密码去掉了容易混淆的 `0 O 1 l I`，首次建库后只出现一次；请查看 `data/initial-accounts.txt` 或启动日志。
+- 默认账号的初始密码等于用户名，属于公开的初始凭据，建议首次登录后在「我的学习档案 → 修改密码」里改掉。
 
-```yaml
-settings:
-  password: "换成你自己的强密码"
-  state_file: "data/preferences.json"
-```
+### 权限
 
-密码只用于解锁“写入服务器”的模式。更推荐使用哈希：
+| 能力               | 普通用户 | 管理员 | 超级管理员 |
+| ---------------- | ---- | --- | ----- |
+| 保存自己的设置 / 学习进度   | ✅    | ✅   | ✅     |
+| 查看自己的学习档案、改自己的密码 | ✅    | ✅   | ✅     |
+| 查看所有人的进度         | —    | ✅   | ✅     |
+| 重置他人密码、新增普通账号    | —    | ✅   | ✅     |
+| 新增管理员、停用/启用账号    | —    | —   | ✅     |
+| 修改未登录用户的默认设置     | —    | —   | ✅     |
 
-```bash
-uv run python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('换成你自己的强密码'))"
-```
+### 忘记密码
 
-把输出写入 `settings.password_hash`，并移除 `settings.password`。也可以用环境变量覆盖：
+- 普通用户：让管理员在「用户管理」里点「重置密码」，留空会自动生成 8 位随机密码。
+- 管理员：让超级管理员重置。
+- 超级管理员也进不去时，在服务器上直接改库：
+  ```bash
+  cd /home/admin/littleflash
+  LITTLEFLASH_HOME=$PWD PYTHONPATH=$PWD/src .venv/bin/python - <<'PY'
+  from pathlib import Path
+  from littleflash.users import find_user, set_password
+  db = Path("data/littleflash.db")
+  user = find_user(db, "telecomadmin")
+  set_password(db, user.id, "新的强密码")
+  print("done")
+  PY
+  ```
 
-```bash
-export LITTLEFLASH_SETTINGS_PASSWORD='另一个强密码'
-```
+## 学习进度
 
-其他可用环境变量：`LITTLEFLASH_CONFIG`、`LITTLEFLASH_SECRET_KEY`、`LITTLEFLASH_HOST`、`LITTLEFLASH_PORT`、`LITTLEFLASH_DEBUG`、`LITTLEFLASH_TRUST_PROXY`、`LITTLEFLASH_COOKIE_SECURE`。
+- 首页加载时读取服务器上保存的断点：同词书、同单元时优先按 `word_en` 定位，找不到再退回词序号；轮次一并恢复。
+- 登录状态下每 12 秒上报一次学习时长；切词时额外补一次；关闭/切走页面前再补一次（`keepalive`）。
+- 单次上报的时长上限为 600 秒，越界或非法字段由服务端夹紧后再累加。
+- 游客不上报进度，只保留本机设置。
 
-> 示例密码 `littleflash-admin` 只用于第一次打开页面。部署前一定修改，并限制配置文件权限：
+## 配置
 
-```bash
-chmod 600 config.yml
-```
+配置不再使用 `config.yml`，而是存放在数据库的 `site_settings` 表；首次启动写入默认值，可用任意 SQLite 客户端修改。
 
-## 词书格式与动态识别
+| 键                                | 默认值             | 说明                             |
+| -------------------------------- | --------------- | ------------------------------ |
+| `app.host`                       | `127.0.0.1`     | 监听地址                           |
+| `app.port`                       | `4570`          | 监听端口                           |
+| `app.debug`                      | `false`         | Flask 调试模式                     |
+| `app.session_hours`              | `2`             | 登录会话有效期                        |
+| `app.secret_key`                 | 随机 64 位十六进制     | 会话签名密钥（首次建库生成）                 |
+| `wordbooks.directory`            | `src/wordbooks` | 词书目录，相对项目根                     |
+| `wordbooks.auto_reload`          | `true`          | 词书变动后自动重载                      |
+| `wordbooks.max_file_size_kb`     | `4096`          | 单个词书文件大小上限                     |
+| `wordbooks.max_books`            | `100`           | 最多加载词书数                        |
+| `audio.enabled`                  | `true`          | 是否启用发音                         |
+| `audio.type`                     | `2`             | 有道发音类型                         |
+| `audio.timeout_seconds`          | `8`             | 下载音频超时                         |
+| `audio.max_bytes`                | `3145728`       | 音频大小上限                         |
+| `audio.cache_dir`                | `.cache/audio`  | 音频缓存目录                         |
+| `audio.cache_ttl_hours`          | `720`           | 音频缓存时长                         |
+| `security.trust_proxy_headers`   | `true`          | 是否信任 `X-Forwarded-*`（子路径部署需开启） |
+| `security.cookie_secure`         | `false`         | HTTPS 站点请设为 `true`             |
+| `security.login_max_attempts`    | `5`             | 单账号连续失败次数                      |
+| `security.login_window_seconds`  | `600`           | 失败计数窗口                         |
+| `security.login_lockout_seconds` | `900`           | 锁定时长                           |
 
-每个 `.json` 文件是一本词书。后端会递归扫描词书目录，读取成功的新文件会自动出现在页面上（词书列表请求时重新检查目录签名）。损坏、超大、无有效单词的文件会被跳过并在服务日志中给出警告，不会让站点崩溃。
+环境变量优先级最高，便于同一份代码跑不同环境：
+
+| 变量                                                             | 作用                                    |
+| -------------------------------------------------------------- | ------------------------------------- |
+| `LITTLEFLASH_HOME`                                             | 项目根目录（默认由代码位置推断）                      |
+| `LITTLEFLASH_DB`                                               | 数据库路径（默认 `<项目根>/data/littleflash.db`） |
+| `LITTLEFLASH_HOST` / `LITTLEFLASH_PORT`                        | 覆盖监听地址/端口                             |
+| `LITTLEFLASH_DEBUG`                                            | `true` / `false`                      |
+| `LITTLEFLASH_SECRET_KEY`                                       | 覆盖会话密钥                                |
+| `LITTLEFLASH_WORDBOOKS`                                        | 覆盖词书目录                                |
+| `LITTLEFLASH_TRUST_PROXY`                                      | 是否信任代理头                               |
+| `LITTLEFLASH_COOKIE_SECURE`                                    | Cookie 是否带 Secure                     |
+| `LITTLEFLASH_SESSION_HOURS`                                    | 会话有效期（小时）                             |
+| `LITTLEFLASH_LOGIN_MAX_ATTEMPTS` / `LITTLEFLASH_LOGIN_LOCKOUT` | 登录限流参数                                |
+
+> 修改 `app.host` / `app.port` 后需要重启服务；`security.cookie_secure` 修改后重启生效。
+
+## 词书格式
 
 ```json
 {
-  "id": "my-book",
-  "title": "我的词书",
+  "id": "pep2019-compulsory-1",
+  "title": "人教版高中英语必修一",
   "stage": "senior",
-  "edition": "2026",
-  "source": "自建",
+  "edition": "2019",
   "units": [
     {
-      "id": "u1",
-      "title": "Unit 1",
+      "id": "unit-1",
+      "title": "Unit 1 · Teenage Life",
       "words": [
         {
           "en": "serendipity",
@@ -169,54 +177,53 @@ chmod 600 config.yml
 - **自动模式**：每一面停留设定秒数，英文面 → 中文面 → 下一个单词，循环进行。卡片上的暂停按钮可随时暂停/继续。
 - **手动模式**：点击卡片或按空格翻面；第二面再操作即进入下一个单词。
 - **方向**：设置页可以调换英文/中文哪一首先出现。
-- **顺序**：按词书顺序，或每次打开学习页随机打乱。
+- **顺序**：按词书顺序，或每次打开学习页随机打乱；每完成一轮会重新洗牌。
 - **单词范围**：可以选整本词书，也可以只选一个单元。
 - **快捷键**：`Space` 暂停/继续（手动模式为翻面/下一个）、`←` / `→` 切换单词、`R` 重播发音。
-- **声音**：浏览器自动播放策略要求页面至少有一次用户交互；页面会用「等待点击」和提示文字引导。点击任意处后，后续英文面和中文面都会尝试朗读。
+- **声音**：浏览器自动播放策略要求页面至少有一次用户交互；页面会用「等待点击」和提示文字引导。
 - 设置页任何修改都会在约 0.3 秒后自动保存；离开前若有未完成的保存，会提示确认。
 
-## nginx 生产部署
+### 两种设置模式
+
+| 场景                  | 保存位置                                  | 影响范围        |
+| ------------------- | ------------------------------------- | ----------- |
+| 未登录                 | 当前浏览器的 `localStorage`                 | 仅这台设备，不影响他人 |
+| 已登录                 | SQLite 的 `preferences` 表（`user:<id>`） | 仅当前账号       |
+| 超级管理员 `?scope=site` | `preferences` 表的 `anonymous` 行        | 所有未登录访客的默认值 |
+
+## 生产部署
 
 实现方式是 gunicorn 监听本机端口，nginx 反向代理；示例配置见 [`deploy/nginx.conf`](deploy/nginx.conf)。
 
 1. 准备环境：
 
+
    ```bash
    cd /path/to/LittleFlash
-   uv sync
-   # 修改 config.yml：密码、缓存路径、cookie_secure 等
+   uv sync      # 或 python -m venv .venv && .venv/bin/pip install -e .
    ```
-
-2. 启动 gunicorn（建议 1 个进程 + 多线程）：
-
+2. 启动：
    ```bash
-   .venv/bin/gunicorn \
-     --workers 1 --threads 4 \
-     --bind 127.0.0.1:8000 \
-     --access-logfile - --error-logfile - \
-     littleflash.wsgi:app
+   # 单文件入口：读取 SQLite 配置，内置 gunicorn（1 进程 + 4 线程）
+   .venv/bin/python deploy/LittleFlash.py
    ```
-
-   也可以使用 systemd 示例 [`deploy/littleflash.service`](deploy/littleflash.service)。
-
-3. 将 `deploy/nginx.conf` 复制到 nginx 的配置目录，替换 `server_name`，然后：
-
+   systemd 示例见 [`deploy/littleflash.service`](deploy/littleflash.service)：
+   ```ini
+   [Service]
+   User=admin
+   WorkingDirectory=/home/admin/littleflash
+   Environment=LITTLEFLASH_HOME=/home/admin/littleflash
+   ExecStart=/home/admin/littleflash/.venv/bin/python /home/admin/LittleFlash/LittleFlash.py
+   ```
+   > 登录限流是进程内状态，请保持 `workers = 1`（多线程即可承载个人/小团队使用）。
+3. 将 `deploy/nginx.conf` 复制到 nginx 配置目录，替换 `server_name`，然后：
    ```bash
    sudo nginx -t
    sudo systemctl reload nginx
    ```
+4. 使用 HTTPS 时把 `security.cookie_secure` 设为 `true`，并让 nginx 转发 `X-Forwarded-Proto`（示例已包含）。
 
-4. 使用 HTTPS 时，在 `config.yml` 设置：
-
-   ```yaml
-   security:
-     trust_proxy_headers: true
-     cookie_secure: true
-   ```
-
-   并让 nginx 转发 `X-Forwarded-Proto`（示例配置已经包含）。
-
-> 站点可以挂在域名根路径（`location /`），也可以挂在子路径（如 `https://example.com/littleflash/`）。子路径部署时按下面的「子路径反代」配置：nginx 剥掉前缀并发送 `X-Forwarded-Prefix`，应用会自动把静态资源、接口与跳转地址都加上前缀。
+> 站点可以挂在域名根路径（`location /`），也可以挂在子路径（如 `https://example.com/littleflash/`）。
 
 ### 子路径反代（如 /littleflash）
 
@@ -244,64 +251,61 @@ location ^~ /littleflash/ {
 - `proxy_pass` 末尾的 `/` 不能省，否则前缀不会被剥掉，应用会按根路径收到整个 URI。
 - `security.trust_proxy_headers` 为 `true` 时应用才会读取 `X-Forwarded-Prefix`（`ProxyFix(x_prefix=1)`）。
 
-### 单文件启动入口
-
-`deploy/LittleFlash.py` 是可直接运行的生产入口：它把 `<部署目录>/src` 加入模块搜索路径、读取 `<部署目录>/config.yml`，并用内置的 gunicorn（1 进程 + 4 线程）监听 `config.yml` 里的地址与端口。
-
-```bash
-./.venv/bin/python /path/to/LittleFlash.py
-```
-
-部署目录默认为 `/home/admin/littleflash`，可用环境变量 `LITTLEFLASH_HOME` 覆盖。
-
 ### 反向代理要点
 
 - nginx 必须发送 `Host`、`X-Real-IP`、`X-Forwarded-For`、`X-Forwarded-Proto`；示例使用 `$http_host`，在非标准端口下也能让 Origin 校验通过。
-- gunicorn 只绑定 `127.0.0.1`，不要直接把 8000 暴露公网。
-- 设置接口只传小型 JSON，示例限制 `client_max_body_size 64k`。
+- gunicorn 只绑定 `127.0.0.1`，不要直接把端口暴露公网。
+- 登录/设置接口只传小型 JSON，示例限制 `client_max_body_size 64k`。
 - 音频由后端代理，nginx 不需要额外放行有道域名。
 - 静态文件由 Flask 提供；如果自行让 nginx `alias` 静态目录，请同时配置缓存头，并继续让 API 走反向代理。
 
 ## 安全设计
 
-- 设置页密码从不通过 API 或 HTML 下发；支持明文或 Werkzeug 哈希，使用常量时间比较。
-- 登录失败按 IP 滚动计数并锁定；同时校验 CSRF 双令牌（Session + `X-CSRF-Token`）与 Origin / Fetch-Site。
-- 会话使用 HttpOnly + SameSite=Lax 的签名 Cookie；登录成功时清空旧会话并轮换 CSRF。
-- 设置页所有写操作要求已认证且 CSRF 通过；非 JSON 请求拒绝。
-- 未登录访客只拿到与 `/api/bootstrap` 相同的公开默认值，修改只写浏览器 `localStorage`；读取时会做类型与范围清洗，内容损坏或被篡改则回退默认值。
-- 响应带 CSP、X-Content-Type-Options、X-Frame-Options、Referrer-Policy、Permissions-Policy 等安全头；HTTPS 下启用 HSTS。
-- 有道发音只允许词书中实际存在的单词，固定上游域名，限制重定向域名、文件大小和超时；缓存路径由哈希生成，无路径穿越。
-- 词书扫描限制文件大小、文件数量和总词数，忽略符号链接和隐藏路径。
-- 偏好文件使用文件锁 + 原子替换写入，权限 600；会话密钥首次运行自动生成，权限 600。
-- 登录限流是进程内状态，示例部署使用单 worker；多 worker 时每个进程各自计数。
+- 密码使用 Werkzeug 哈希存储，校验失败不区分「用户不存在」与「密码错误」。
+- 登录失败按「IP + 用户名」滚动计数，另有更宽松的 IP 级总闸；触发后返回 `429` 与 `Retry-After`。
+- 所有写接口校验 CSRF 双令牌（Session + `X-CSRF-Token`）与 Origin / `Sec-Fetch-Site`。
+- 会话使用 HttpOnly + SameSite=Lax 的签名 Cookie；登录、改密成功时清空旧会话并轮换 CSRF。
+- 严格 CSP（无 `unsafe-inline`）、`X-Frame-Options: DENY`、`nosniff`、COOP 等响应头。
+- SQLite 文件建议保持 `600`；数据库内含密码哈希，不要提交到版本库（见 `.gitignore`）。
+- 静态资源带内容指纹（`?v=<hash>`），升级后浏览器会自动拉取新版本。
 
 ## 测试
 
 ```bash
-uv sync
-uv run pytest -q
+.venv/bin/python -m pytest -q
 ```
 
-测试覆盖登录/CSRF/限流、设置保存、词书动态发现、错误词书跳过、发音白名单与安全响应头等。
+- `tests/test_app.py`：账号初始化、登录/限流、会话、权限、设置隔离、站点默认值、学习进度、管理员操作、音频与安全头。
+- `tests/test_subpath.py`：`X-Forwarded-Prefix` 下的静态资源、链接与登录跳转。
+- `.jstest/e2e-local.js`（可选）：用无头 Chrome 跑真实浏览器流程（登录、续学、设置保存、用户管理）。
 
-## 依赖与致谢
+本地跑端到端：
 
-- [Flask](https://flask.palletsprojects.com/) + [Gunicorn](https://gunicorn.org/)
-- 单词发音来自[网易有道词典](https://dict.youdao.com/)，仅作个人学习用途；音频请求经服务端缓存，请遵守上游服务条款。
-- 界面使用 Fraunces 与 Manrope 字体，SIL Open Font License 1.1（许可文件在 `src/littleflash/static/fonts/`）。
-- 现有词书来自项目初期的 PEP 2019 数据，具体来源见各 JSON 的 `source` 字段。
+```bash
+# 终端 A：启动服务（示例端口 5055）
+LITTLEFLASH_PORT=5055 python -m littleflash
+
+# 终端 B：运行浏览器检查
+node .jstest/e2e-local.js
+```
+
+## 数据、备份与迁移
+
+- 全部状态都在 `data/littleflash.db`（WAL 模式会额外产生 `-wal` / `-shm` 文件）。
+- 备份：停服务后复制整个 `data/` 目录，或执行 `sqlite3 data/littleflash.db ".backup 'backup.db'"`。
+- 迁移到新机器：复制项目与 `data/littleflash.db` 即可；`app.secret_key` 在库内，旧会话继续有效。
+- 删除数据库会重新生成 440 个默认账号和新的管理员密码。
 
 ## 常见问题
 
-**页面能打开，但没有声音？**
+**页面顶部显示「登录」，设置保存后没有同步？**  
+未登录时设置只写本机浏览器；登录后才会保存到账号。登录入口在 `/login`。
 
-先点击页面任意位置解锁浏览器音频策略，再检查服务器是否能访问 `dict.youdao.com`。首次请求有数秒延迟属正常，成功后音频会缓存到 `.cache/audio`。
+**保存设置提示「登录已过期」？**  
+会话默认 2 小时，过期后写接口返回 401，前端会跳到登录页；重新登录即可。
 
-**修改了词书但没有出现？**
+**登录提示「尝试次数过多」？**  
+同一账号连续失败 5 次会锁定 15 分钟；等待倒计时结束，或让管理员重置密码。
 
-确认文件是合法 UTF-8 JSON、单词包含 `en` 和 `zh`、文件不超过 `wordbooks.max_file_size_kb`。查看后端日志会看到对应的跳过原因。页面刷新后会重新扫描。
-
-**设置保存失败？**
-
-本地模式下只依赖浏览器存储：无痕/隐私模式可能禁用 localStorage，状态会显示“本机存储不可用”。
-服务器模式下请检查 `data/` 目录的写权限；若超过 2 小时未操作，重新登录即可。网络失败时页面会保留“重试”按钮。
+**改完端口/HTTPS 没生效？**  
+`app.port`、`security.cookie_secure` 等在启动时读取，修改后需要重启服务。

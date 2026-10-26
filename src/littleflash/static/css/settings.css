@@ -29,6 +29,21 @@
   background: rgba(220, 233, 144, 0.18);
 }
 
+.mode-banner[data-mode="user"] {
+  border-color: rgba(29, 107, 92, 0.28);
+  background: rgba(29, 107, 92, 0.07);
+}
+
+.mode-banner[data-mode="site"] {
+  border-color: rgba(230, 91, 53, 0.36);
+  background: rgba(243, 201, 176, 0.24);
+}
+
+.mode-banner[data-mode="site"] .mode-banner__icon {
+  color: var(--coral-deep);
+  background: rgba(230, 91, 53, 0.12);
+}
+
 .mode-banner__icon {
   display: grid;
   place-items: center;
@@ -135,7 +150,6 @@
   background: rgba(23, 51, 44, 0.07);
   font-size: 9px;
 }
-
 @media (max-width: 720px) {
   .mode-banner {
     flex-wrap: wrap;

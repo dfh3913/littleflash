@@ -1,4 +1,8 @@
-"""Small, dependency-light security primitives used by the web app."""
+"""Small, dependency-light security primitives used by the web app.
+
+密码校验已经迁到 :mod:`littleflash.users`（每个用户一条 Werkzeug 哈希），
+这里只保留与请求生命周期相关的 CSRF 令牌和进程内登录限流。
+"""
 
 from __future__ import annotations
 
@@ -9,8 +13,6 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from werkzeug.security import check_password_hash
-
 
 def new_csrf_token() -> str:
     return secrets.token_urlsafe(32)
@@ -20,32 +22,6 @@ def csrf_equal(expected: str | None, actual: str | None) -> bool:
     if not expected or not actual:
         return False
     return hmac.compare_digest(expected, actual)
-
-
-def verify_password(
-    configured_password: str | None,
-    configured_hash: str | None,
-    candidate: str,
-) -> bool:
-    """Check a plaintext or Werkzeug-hashed settings password safely."""
-    if not candidate or len(candidate) > 1024:
-        return False
-    try:
-        if configured_hash:
-            return bool(check_password_hash(configured_hash, candidate))
-        if configured_password:
-            return hmac.compare_digest(
-                configured_password.encode("utf-8"), candidate.encode("utf-8")
-            )
-    except (ValueError, TypeError):
-        return False
-    return False
-
-
-def password_is_configured(
-    configured_password: str | None, configured_hash: str | None
-) -> bool:
-    return bool(configured_password or configured_hash)
 
 
 @dataclass(slots=True)
@@ -129,3 +105,6 @@ class LoginRateLimiter:
                 stale.append(key)
         for key in stale:
             self._states.pop(key, None)
+
+
+__all__ = ["LoginRateLimiter", "csrf_equal", "new_csrf_token"]

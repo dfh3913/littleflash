@@ -5,9 +5,13 @@
 
     /home/admin/littleflash/.venv/bin/python /home/admin/LittleFlash/LittleFlash.py
 
+配置（监听地址、端口、音频、会话）已迁移到 SQLite 的 site_settings 表，
+数据库默认位于 <LITTLEFLASH_HOME>/data/littleflash.db；首次启动会自动
+建库、写入默认配置并生成初始账号（见 data/initial-accounts.txt）。
+
 默认用 gunicorn 监听 127.0.0.1:4570（1 个进程 + 4 线程），再由 nginx
-反代到 https://6090723.xyz/littleflash。监听地址、端口可由 config.yml 或
-环境变量 LITTLEFLASH_HOME / LITTLEFLASH_HOST / LITTLEFLASH_PORT 覆盖。
+反代到 https://6090723.xyz/littleflash。可用环境变量
+LITTLEFLASH_HOME / LITTLEFLASH_DB / LITTLEFLASH_HOST / LITTLEFLASH_PORT 覆盖。
 """
 
 from __future__ import annotations
@@ -20,18 +24,15 @@ APP_HOME = Path(
     os.environ.get("LITTLEFLASH_HOME", "/home/admin/littleflash")
 ).expanduser().resolve()
 SRC_DIR = APP_HOME / "src"
-CONFIG_FILE = APP_HOME / "config.yml"
 
 
 def prepare_runtime() -> None:
-    """把部署目录加入模块搜索路径，并固定运行目录与配置文件位置。"""
+    """把部署目录加入模块搜索路径，并固定运行目录。"""
     if not SRC_DIR.is_dir():
         raise SystemExit(f"找不到应用代码目录：{SRC_DIR}")
-    if not CONFIG_FILE.is_file():
-        raise SystemExit(f"找不到配置文件：{CONFIG_FILE}")
     sys.path.insert(0, str(SRC_DIR))
     os.chdir(APP_HOME)
-    os.environ.setdefault("LITTLEFLASH_CONFIG", str(CONFIG_FILE))
+    os.environ.setdefault("LITTLEFLASH_HOME", str(APP_HOME))
     # gunicorn 以本文件目录之外的 cwd 启动时，也能找到 littleflash 包。
     existing = os.environ.get("PYTHONPATH", "")
     if str(SRC_DIR) not in existing.split(os.pathsep):
@@ -44,10 +45,14 @@ def main() -> None:
     prepare_runtime()
 
     from littleflash.app import create_app
-    from littleflash.config import load_config
+    from littleflash.config import ConfigError, load_config
 
-    config = load_config(str(CONFIG_FILE))
-    app = create_app(str(CONFIG_FILE))
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        raise SystemExit(f"配置错误：{exc}") from exc
+
+    app = create_app(config)
 
     host = os.environ.get("LITTLEFLASH_HOST") or config.host
     port = int(os.environ.get("LITTLEFLASH_PORT") or config.port)
@@ -79,7 +84,7 @@ def main() -> None:
 
     options = {
         "bind": f"{host}:{port}",
-        # 设置页的登录限流是进程内状态，保持单 worker 才能准确计数。
+        # 登录限流是进程内状态，保持单 worker 才能准确计数。
         "workers": 1,
         "worker_class": "gthread",
         "threads": 4,
@@ -96,7 +101,8 @@ def main() -> None:
         f"闪词已启动：http://{host}:{port}（gunicorn · 1 worker / 4 threads）",
         flush=True,
     )
-    print(f"设置页：    http://{host}:{port}/settings", flush=True)
+    print(f"数据库：    {config.db_path}", flush=True)
+    print(f"用户中心：  http://{host}:{port}/account", flush=True)
     LittleFlashServer(app, options).run()
 
 

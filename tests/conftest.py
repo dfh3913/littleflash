@@ -3,14 +3,11 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
-import yaml
 
 from littleflash.app import create_app
-
-PASSWORD = "test-settings-password"
 
 
 def sample_wordbook(book_id: str, title: str = "Test Wordbook") -> dict[str, Any]:
@@ -25,87 +22,106 @@ def sample_wordbook(book_id: str, title: str = "Test Wordbook") -> dict[str, Any
                 "id": "u1",
                 "title": "Unit 1 · Greetings",
                 "words": [
-                    {
-                        "en": "apple",
-                        "zh": "n. 苹果",
-                        "phonetic": "/ˈæpəl/",
-                    },
-                    {
-                        "en": "banana",
-                        "zh": "n. 香蕉",
-                        "phonetic": "/bəˈnɑːnə/",
-                    },
+                    {"en": "apple", "zh": "n. 苹果", "phonetic": "/ˈæpəl/"},
+                    {"en": "banana", "zh": "n. 香蕉", "phonetic": "/bəˈnɑːnə/"},
                 ],
-            }
+            },
+            {
+                "id": "u2",
+                "title": "Unit 2 · Fruit",
+                "words": [
+                    {"en": "cherry", "zh": "n. 樱桃", "phonetic": "/ˈtʃeri/"},
+                ],
+            },
         ],
     }
 
 
-def write_config(
-    tmp_path: Path,
-    *,
-    password: str | None = PASSWORD,
-    password_hash: str | None = None,
-    attempts: int = 5,
-    lockout: int = 60,
-    cookie_secure: bool = False,
-    max_file_size_kb: int = 4096,
-) -> Path:
-    wordbooks = tmp_path / "wordbooks"
-    wordbooks.mkdir(exist_ok=True)
-    (wordbooks / "alpha.json").write_text(
-        json.dumps(sample_wordbook("alpha", "Alpha Book")), encoding="utf-8"
-    )
-    (wordbooks / "beta.json").write_text(
-        json.dumps(sample_wordbook("beta", "Beta Book")), encoding="utf-8"
-    )
-    settings: dict[str, Any] = {
-        "state_file": "data/preferences.json",
-    }
-    if password is not None:
-        settings["password"] = password
-    if password_hash is not None:
-        settings["password_hash"] = password_hash
+def read_credentials(app) -> dict[str, str]:
+    """读取首次建库时写入的初始账号文件。"""
+    config = app.extensions["littleflash"].config
+    path = config.db_path.parent / "initial-accounts.txt"
+    creds: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, _, password = line.partition("\t")
+        creds[name] = password
+    return creds
 
-    data = {
-        "app": {
-            "host": "127.0.0.1",
-            "port": 8000,
-            "session_hours": 2,
-            "debug": False,
-        },
-        "wordbooks": {
-            "directory": str(wordbooks),
-            "auto_reload": True,
-            "max_file_size_kb": max_file_size_kb,
-            "max_books": 20,
-        },
-        "settings": settings,
-        "audio": {
-            "enabled": True,
-            "type": 2,
-            "timeout_seconds": 2,
-            "max_bytes": 1048576,
-            "cache_dir": str(tmp_path / "audio-cache"),
-            "cache_ttl_hours": 24,
-        },
-        "security": {
-            "trust_proxy_headers": False,
-            "cookie_secure": cookie_secure,
-            "login_max_attempts": attempts,
-            "login_window_seconds": 600,
-            "login_lockout_seconds": lockout,
-        },
-    }
-    path = tmp_path / "config.yml"
-    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
-    return path
+
+def extract_csrf(html: str) -> str:
+    match = re.search(r'name="csrf-token" content="([^"]+)"', html)
+    assert match, "CSRF meta tag missing"
+    return match.group(1)
+
+
+def login(
+    client,
+    username: str,
+    password: str,
+    *,
+    page: str = "/login",
+) -> dict[str, str]:
+    token = extract_csrf(client.get(page).get_data(as_text=True))
+    response = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": password},
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 200, response.get_data(as_text=True)
+    data = response.get_json()
+    return {"X-CSRF-Token": data["csrfToken"]}
 
 
 @pytest.fixture()
-def app(tmp_path: Path):
-    config_path = write_config(tmp_path)
-    application = create_app(str(config_path))
+def make_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Any]:
+    """按需创建独立数据库的应用实例（每个测试互不干扰）。"""
+    counter = {"n": 0}
+
+    def factory(
+        *,
+        seed_accounts: int = 6,
+        attempts: int = 5,
+        lockout: int = 60,
+        cookie_secure: bool = False,
+        session_hours: float = 2,
+        trust_proxy: bool = False,
+    ):
+        counter["n"] += 1
+        home = tmp_path / f"home-{counter['n']}"
+        wordbooks = home / "src" / "wordbooks"
+        wordbooks.mkdir(parents=True)
+        (wordbooks / "alpha.json").write_text(
+            json.dumps(sample_wordbook("alpha", "Alpha Book")), encoding="utf-8"
+        )
+        (wordbooks / "beta.json").write_text(
+            json.dumps(sample_wordbook("beta", "Beta Book")), encoding="utf-8"
+        )
+
+        monkeypatch.setenv("LITTLEFLASH_HOME", str(home))
+        monkeypatch.setenv("LITTLEFLASH_DB", str(home / "data" / "littleflash.db"))
+        monkeypatch.setenv("LITTLEFLASH_WORDBOOKS", str(wordbooks))
+        monkeypatch.setenv("LITTLEFLASH_SEED_ACCOUNTS", str(seed_accounts))
+        monkeypatch.setenv("LITTLEFLASH_TRUST_PROXY", "1" if trust_proxy else "0")
+        monkeypatch.setenv("LITTLEFLASH_LOGIN_MAX_ATTEMPTS", str(attempts))
+        monkeypatch.setenv("LITTLEFLASH_LOGIN_LOCKOUT", str(lockout))
+        monkeypatch.setenv(
+            "LITTLEFLASH_COOKIE_SECURE", "1" if cookie_secure else "0"
+        )
+        monkeypatch.setenv("LITTLEFLASH_SESSION_HOURS", str(session_hours))
+
+        application = create_app()
+        application.config.update(TESTING=True)
+        return application
+
+    return factory
+
+
+@pytest.fixture()
+def app(make_app):
+    application = make_app()
     application.config.update(TESTING=True)
     return application
 
@@ -120,22 +136,22 @@ def services(app):
     return app.extensions["littleflash"]
 
 
-def extract_csrf(html: str) -> str:
-    match = re.search(r'name="csrf-token" content="([^"]+)"', html)
-    assert match, "CSRF meta tag missing"
-    return match.group(1)
+@pytest.fixture()
+def creds(app) -> dict[str, str]:
+    return read_credentials(app)
 
 
-def login(client, password: str = PASSWORD) -> dict[str, str]:
-    page = client.get("/settings")
-    token = extract_csrf(page.get_data(as_text=True))
-    response = client.post(
-        "/api/auth/login",
-        json={"password": password},
-        headers={"X-CSRF-Token": token},
-    )
-    assert response.status_code == 200, response.get_data(as_text=True)
-    data = response.get_json()
-    return {
-        "X-CSRF-Token": data["csrfToken"],
-    }
+@pytest.fixture()
+def admin_headers(client, creds) -> dict[str, str]:
+    return login(client, "admin", creds["admin"])
+
+
+@pytest.fixture()
+def superadmin_headers(client, creds) -> dict[str, str]:
+    return login(client, "telecomadmin", creds["telecomadmin"])
+
+
+@pytest.fixture()
+def user_headers(client) -> dict[str, str]:
+    # 默认账号 240101 的密码与用户名相同
+    return login(client, "240101", "240101")
