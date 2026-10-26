@@ -2,7 +2,9 @@
 __pycache__/
 *.py[oc]
 build/
-dist/
+dist/*
+# The single-file build is a shipping artifact users download directly.
+!dist/littleflash-*-standalone.html
 wheels/
 *.egg-info/
 .pytest_cache/
@@ -26,3 +28,7 @@ data/.*.tmp
 .artifacts/
 *.log
 .DS_Store
+
+# Local deployment config and generated artifacts
+config.yml
+scripts/.translation-cache.json

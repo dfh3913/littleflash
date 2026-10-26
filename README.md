@@ -5,36 +5,44 @@
 
 LittleFlash 从 `src/wordbooks` 动态读取词书，按你设定的方向、顺序与频率在英文/中文之间切换；可以在词面显示时朗读，也可以在释义显示时再朗读一遍。所有学习偏好保存在服务端，设置页由 `config.yml` 中的独立密码保护。
 
+当前版本：**0.1.3 Vodyanitsa**。支持同时选择多本词书的多个单元、可复现的随机种子、后台发音预缓存，以及无后端的单文件 HTML 版本。
+
 ## 功能
 
 - **双面闪卡**：先英后中，或先中后英；英文面显示单词与音标。
 - **自动 / 手动节奏**：自动模式按 1–30 秒（0.5 秒步进）停留并切换；手动模式点击卡片、按钮或按空格翻面。
 - **词书动态识别**：启动后仍可新增、删除或修改 `src/wordbooks/*.json`，无需重启；支持子目录。
-- **独立学习范围**：词书、单元、显示方向、顺序（词书顺序 / 随机打乱）、节奏与发音分别设置。
-- **有道单词发音**：英文面与中文面都会自动朗读；后端代理并缓存网易有道词典音频，不把用户 IP 直接交给第三方。
+- **独立学习范围**：可同时勾选**多本词书、每本书的多个单元**，组合成跨书学习范围。
+- **有道单词发音**：英文面与中文面都会自动朗读；后端代理并缓存网易有道词典音频，不把用户 IP 直接交给第三方。开启后台预缓存后，会提前下载当前学习范围的发音。
 - **免密码本地设置**：`/settings` 打开即可调整，默认只把偏好写进当前浏览器的 localStorage，不影响其他人、也不写服务器配置；需要改全站默认值时才用 `config.yml` 里的密码登录。
 - **简洁的响应式界面**：居中闪卡布局，桌面到手机自动适配；内置 Fraunces / Manrope 字体，无需访问 Google Fonts。
 - **适合 nginx 反代**：标准 Flask WSGI 应用，附 gunicorn 与 nginx 示例。
+- **单文件版**：`scripts/build_standalone.py` 可生成一个无后端的 HTML，词书与设置全部内嵌，直接放到 Cloudflare Pages / 任意静态托管即可。
 
 ## 目录结构
 
 ```text
 LittleFlash/
-├── config.yml                   # 主配置（设置页密码在这里）
+├── config.example.yml           # 配置示例；复制为 config.yml 后修改
 ├── pyproject.toml
 ├── src/
 │   ├── littleflash/             # Flask 后端、模板、静态资源
 │   │   ├── app.py
-│   │   ├── audio.py             # 有道发音代理 + 磁盘缓存
+│   │   ├── audio.py             # 有道发音代理 + 磁盘缓存 + 后台预热
 │   │   ├── config.py
-│   │   ├── preferences.py       # 原子写入的学习偏好
+│   │   ├── preferences.py       # 多词书选择 / 随机种子 / 原子写入
 │   │   ├── security.py          # 密码校验与登录限流
 │   │   ├── wordbooks.py         # 动态词书发现与校验
 │   │   ├── static/
 │   │   └── templates/
-│   └── wordbooks/               # 词书目录（可在 config.yml 改）
+│   └── wordbooks/               # 词书目录
 ├── data/                        # 运行时生成：偏好、会话密钥
 ├── .cache/audio/                # 有道发音缓存
+├── standalone/                  # 单文件版源码（模板 / JS / CSS）
+├── scripts/
+│   ├── build_standalone.py      # 生成 dist/littleflash-0.1.3-standalone.html
+│   └── fill_translations.py     # 补全词书里缺失的释义
+├── dist/                        # 单文件版构建产物（已忽略）
 ├── deploy/
 │   ├── nginx.conf
 │   └── littleflash.service
@@ -48,14 +56,15 @@ LittleFlash/
 ```bash
 uv sync
 
-# 第一次运行前，请修改 config.yml 中的 settings.password
+# 第一次运行前，从示例复制配置并修改设置页密码
+cp config.example.yml config.yml
 uv run python -m littleflash
 ```
 
 打开：
 
-- 闪卡首页：<http://127.0.0.1:8000/>
-- 设置页：<http://127.0.0.1:8000/settings>
+- 闪卡首页：<http://127.0.0.1:4570/>
+- 设置页：<http://127.0.0.1:4570/settings>
 
 也可以使用 venv + pip：
 
@@ -63,12 +72,15 @@ uv run python -m littleflash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+cp config.example.yml config.yml
 littleflash
 ```
 
-默认只监听 `127.0.0.1:8000`，适合由 nginx 反代；本机调试也可以直接访问。生产环境不要使用 Flask 开发服务器。
+默认只监听 `127.0.0.1:4570`，适合由 nginx 反代；本机调试也可以直接访问。生产环境不要使用 Flask 开发服务器。
 
 ## 配置 `config.yml`
+
+`config.yml` 不会提交到 Git：从 [`config.example.yml`](config.example.yml) 复制一份再改。设置页密码也可用环境变量 `LITTLEFLASH_SETTINGS_PASSWORD` 覆盖。
 
 | 键 | 说明 |
 | --- | --- |
@@ -85,6 +97,7 @@ littleflash
 | `audio.enabled` | 是否启用有道发音代理。 |
 | `audio.type` | 有道发音类型，1 美音 / 2 英音。 |
 | `audio.cache_dir` / `cache_ttl_hours` | 音频缓存目录与有效期。 |
+| `audio.prefetch` | 是否允许后台预拉取发音，默认 `true`；设置页里管理员还可以临时关闭。 |
 | `security.trust_proxy_headers` | 部署在 nginx 后设为 `true`，以正确识别客户端 IP 和 HTTPS。 |
 | `security.cookie_secure` | 全站启用 HTTPS 后改为 `true`。 |
 | `security.login_*` | 登录失败次数、统计窗口与锁定时长。 |
@@ -169,11 +182,55 @@ chmod 600 config.yml
 - **自动模式**：每一面停留设定秒数，英文面 → 中文面 → 下一个单词，循环进行。卡片上的暂停按钮可随时暂停/继续。
 - **手动模式**：点击卡片或按空格翻面；第二面再操作即进入下一个单词。
 - **方向**：设置页可以调换英文/中文哪一首先出现。
-- **顺序**：按词书顺序，或每次打开学习页随机打乱。
+- **顺序**：按词书顺序，或用随机种子生成可复现的随机顺序。
 - **单词范围**：可以选整本词书，也可以只选一个单元。
 - **快捷键**：`Space` 暂停/继续（手动模式为翻面/下一个）、`←` / `→` 切换单词、`R` 重播发音。
 - **声音**：浏览器自动播放策略要求页面至少有一次用户交互；页面会用「等待点击」和提示文字引导。点击任意处后，后续英文面和中文面都会尝试朗读。
 - 设置页任何修改都会在约 0.3 秒后自动保存；离开前若有未完成的保存，会提示确认。
+
+## 0.1.3：多词书、随机种子与预缓存
+
+### 多本词书 + 多个单元
+
+设置页的「词书与范围」现在是一组可勾选的卡片：
+
+- 勾选任意多本词书；每本书下面可以只选部分单元；
+- 首页会把所有选中单元合并成一个学习队列，卡片下方显示「词书 · 单元」；
+- 进度条按合并后的总词数计算；
+- 保存格式为 `selections: [{wordbook_id, unit_ids}]`，`unit_ids: ["all"]` 表示整本。
+
+### 随机种子
+
+- 顺序选项从「随机打乱」改为「随机顺序」，并新增种子输入框；
+- 首次使用自动生成 8 位种子，点「换一个」可刷新；
+- 种子支持中英文、数字与常见符号，最长 64 个字符；
+- 同一个种子 + 同一个范围 = 同一套顺序；每完成一轮会用「种子 + 轮次」重新洗牌；
+- 旧配置里的 `order: shuffle` 会自动迁移为 `random`。
+
+### 发音预缓存
+
+- 首页加载 deck 时，后端会把当前选中范围的单词排进后台队列，提前下载到 `.cache/audio`；
+- 默认开启，可在设置页「后台预缓存发音」关闭（仅管理员登录后可见）；
+- 预缓存是尽力而为：不阻塞页面请求，失败会在后续触发时重试，单次最多入队 800 个词。
+
+### 加载速度
+
+- 首页只请求一个 `/api/deck`，不再逐本下载完整词书；
+- `/api/deck` 与 `/api/wordbooks/*` 支持 ETag / 304；
+- HTML、JSON、CSS、JS 自动 gzip（实测 deck 102 KB → 18.7 KB）；
+- 单文件版使用紧凑数据、无外部字体、首屏 HTML 在前、数据块在后，gzip 后约 132 KB（对比旧单文件版 236 KB）。
+
+## 单文件 HTML（无后端）
+
+```bash
+python scripts/build_standalone.py
+# 产物：dist/littleflash-0.1.3-standalone.html
+```
+
+- 词书、样式、脚本、图标全部内嵌，双击即可打开；
+- 设置保存在 `localStorage`，支持多词书/多单元、随机种子、发音；
+- 发音直接请求有道 `dictvoice`，不经过后端；
+- 不含任何服务端接口，可直接放到 Cloudflare Pages、对象存储或任意静态托管。
 
 ## nginx 生产部署
 
@@ -192,7 +249,7 @@ chmod 600 config.yml
    ```bash
    .venv/bin/gunicorn \
      --workers 1 --threads 4 \
-     --bind 127.0.0.1:8000 \
+     --bind 127.0.0.1:4570 \
      --access-logfile - --error-logfile - \
      littleflash.wsgi:app
    ```
@@ -257,7 +314,7 @@ location ^~ /littleflash/ {
 ### 反向代理要点
 
 - nginx 必须发送 `Host`、`X-Real-IP`、`X-Forwarded-For`、`X-Forwarded-Proto`；示例使用 `$http_host`，在非标准端口下也能让 Origin 校验通过。
-- gunicorn 只绑定 `127.0.0.1`，不要直接把 8000 暴露公网。
+- gunicorn 只绑定 `127.0.0.1`，不要直接把 4570 暴露公网。
 - 设置接口只传小型 JSON，示例限制 `client_max_body_size 64k`。
 - 音频由后端代理，nginx 不需要额外放行有道域名。
 - 静态文件由 Flask 提供；如果自行让 nginx `alias` 静态目录，请同时配置缓存头，并继续让 API 走反向代理。
@@ -282,7 +339,12 @@ uv sync
 uv run pytest -q
 ```
 
-测试覆盖登录/CSRF/限流、设置保存、词书动态发现、错误词书跳过、发音白名单与安全响应头等。
+当前 20 项测试，覆盖登录/CSRF/限流、多词书选择与 deck、随机种子迁移、设置保存、词书动态发现、发音白名单、gzip/ETag、音频预缓存与安全响应头。
+
+浏览器端到端脚本（可选，需本机 Chrome）：
+
+- `.jstest/e2e-013.js`：登录、多选、种子、保存、首页续学；
+- `.jstest/e2e-standalone.js`：用 `file://` 打开单文件版，检查首屏、设置、多选与种子。
 
 ## 依赖与致谢
 

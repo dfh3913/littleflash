@@ -108,56 +108,41 @@
           <span class="section-number">01</span>
           <div>
             <h2 id="bookSectionTitle">词书与范围</h2>
-            <p>选择想学的词书，也可以只专注其中一个单元。</p>
+            <p>可以同时选择多本词书、每本书的多个单元，组合成自己的学习范围。</p>
           </div>
         </header>
 
-        <div class="field-grid">
-          <div class="field">
-            <label class="field-label" for="wordbookSelect">当前词书</label>
-            <div class="select-shell">
-              <select id="wordbookSelect" name="wordbook_id" {% if not books %}disabled{% endif %}>
-                {% for book in books %}
-                  <option value="{{ book.id }}"
-                    data-title="{{ book.title }}"
-                    data-stage="{{ book.stage }}"
-                    data-edition="{{ book.edition }}"
-                    data-unit-count="{{ book.unitCount }}"
-                    data-word-count="{{ book.wordCount }}"
-                    {% if selected_book_id == book.id %}selected{% endif %}>
-                    {{ book.title }}
-                  </option>
+        <div class="book-picker" id="bookPicker">
+          {% for book in books %}
+            <div class="book-pick" data-book-id="{{ book.id }}" data-word-count="{{ book.wordCount }}">
+              <label class="book-pick__head">
+                <input class="book-pick__check" type="checkbox" value="{{ book.id }}"
+                  {% if book.id in selection_map %}checked{% endif %}>
+                <span class="book-pick__title">{{ book.title }}</span>
+                <span class="book-pick__meta">
+                  {{ book.stage or '本地词书' }}{% if book.edition %} · {{ book.edition }}{% endif %}
+                  · {{ book.unitCount }} 单元 · {{ book.wordCount }} 词
+                </span>
+              </label>
+              <div class="book-pick__units" {% if book.id not in selection_map %}hidden{% endif %}>
+                <div class="book-pick__tools">
+                  <button class="mini-button" type="button" data-unit-all="{{ book.id }}">全选本书</button>
+                  <button class="mini-button" type="button" data-unit-none="{{ book.id }}">清空本书</button>
+                </div>
+                {% for unit in book.units %}
+                  <label class="unit-pick" data-word-count="{{ unit.wordCount }}">
+                    <input class="unit-pick__check" type="checkbox" value="{{ unit.id }}" data-book="{{ book.id }}"
+                      {% if book.id in selection_map and ('all' in selection_map[book.id] or unit.id in selection_map[book.id]) %}checked{% endif %}>
+                    <span>{{ unit.title }}</span>
+                    <small>{{ unit.wordCount }} 词</small>
+                  </label>
                 {% endfor %}
-              </select>
-              <svg class="icon select-chevron" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
+              </div>
             </div>
-            <p class="field-hint">词书会从词书目录动态识别。</p>
-          </div>
-
-          <div class="field">
-            <label class="field-label" for="unitSelect">学习范围</label>
-            <div class="select-shell">
-              <select id="unitSelect" name="unit_id" {% if not units %}disabled{% endif %}>
-                <option value="all" {% if preferences and preferences.unit_id == 'all' %}selected{% endif %}>整本词书</option>
-                {% for unit in units %}
-                  <option value="{{ unit.id }}" {% if preferences and preferences.unit_id == unit.id %}selected{% endif %}>{{ unit.title }} · {{ unit.wordCount }} 词</option>
-                {% endfor %}
-              </select>
-              <svg class="icon select-chevron" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
-            </div>
-            <p class="field-hint">切换词书后，范围会回到整本词书。</p>
-          </div>
+          {% endfor %}
         </div>
-
         {% if books %}
-        <div class="book-brief" id="currentBook">
-          <span class="book-brief__icon" aria-hidden="true"><svg class="icon"><use href="#icon-book"></use></svg></span>
-          <div class="book-brief__text">
-            <strong id="currentBookTitle">{{ selected_book.title if selected_book else '—' }}</strong>
-            <span id="currentBookMeta">{{ (selected_book.stage ~ ' · ' ~ selected_book.edition) if selected_book and (selected_book.stage or selected_book.edition) else '本地词书' }} · {{ units|length }} 个单元</span>
-          </div>
-          <span class="count-chip" id="currentBookCount">{{ selected_book.wordCount if selected_book else 0 }} 词</span>
-        </div>
+          <div class="picker-summary" id="pickerSummary"></div>
         {% endif %}
       </section>
 
@@ -209,8 +194,8 @@
                 <span><svg class="icon" aria-hidden="true"><use href="#icon-list"></use></svg>按词书顺序</span>
               </label>
               <label>
-                <input type="radio" name="order" value="shuffle" {% if preferences and preferences.order == 'shuffle' %}checked{% endif %}>
-                <span><svg class="icon" aria-hidden="true"><use href="#icon-shuffle"></use></svg>随机打乱</span>
+                <input type="radio" name="order" value="random" {% if preferences and (preferences.order == 'random' or preferences.order == 'shuffle') %}checked{% endif %}>
+                <span><svg class="icon" aria-hidden="true"><use href="#icon-shuffle"></use></svg>随机顺序</span>
               </label>
             </div>
           </fieldset>
@@ -228,6 +213,18 @@
               </label>
             </div>
           </fieldset>
+        </div>
+
+        <div class="seed-field" id="seedField" {% if not preferences or preferences.order != 'random' %}hidden{% endif %}>
+          <div class="seed-field__head">
+            <label class="field-label" for="seedInput">随机种子</label>
+            <button class="text-button" id="seedRefresh" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>换一个
+            </button>
+          </div>
+          <input class="seed-input" id="seedInput" name="seed" type="text" maxlength="64"
+                 value="{{ preferences.seed if preferences else '' }}" autocomplete="off" spellcheck="false">
+          <p class="field-hint">支持中英文或数字，最长 64 个字符；相同种子每次生成的顺序一致。</p>
         </div>
 
         <div class="range-field {% if preferences and preferences.mode == 'manual' %}is-inactive{% endif %}" id="intervalField">
@@ -262,6 +259,21 @@
             <span class="sr-only">开启或关闭单词发音</span>
           </label>
         </div>
+
+        {% if authenticated %}
+        <div class="toggle-row">
+          <span class="toggle-row__icon" aria-hidden="true"><svg class="icon"><use href="#icon-loader"></use></svg></span>
+          <div class="toggle-row__copy">
+            <strong>后台预缓存发音</strong>
+            <p>开启后服务器会提前下载当前学习范围的发音并缓存，首次播放更快；只缓存词书里已有的单词。</p>
+          </div>
+          <label class="switch">
+            <input id="audioPrefetchToggle" name="audio_prefetch" type="checkbox" {% if not preferences or preferences.audio_prefetch %}checked{% endif %}>
+            <span class="switch-track" aria-hidden="true"><span></span></span>
+            <span class="sr-only">开启或关闭后台发音预缓存</span>
+          </label>
+        </div>
+        {% endif %}
 
         <div class="range-field {% if preferences and not preferences.audio_enabled %}is-inactive{% endif %}" id="volumeField">
           <div class="range-head">

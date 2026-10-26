@@ -13,31 +13,39 @@ from littleflash.app import create_app
 PASSWORD = "test-settings-password"
 
 
-def sample_wordbook(book_id: str, title: str = "Test Wordbook") -> dict[str, Any]:
+def sample_wordbook(
+    book_id: str,
+    title: str = "Test Wordbook",
+    *,
+    extra_unit: bool = False,
+    words: list[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    first = words or [("apple", "n. 苹果"), ("banana", "n. 香蕉")]
+    units = [
+        {
+            "id": "u1",
+            "title": "Unit 1 · Greetings",
+            "words": [
+                {"en": en, "zh": zh, "phonetic": "/" + en + "/"}
+                for en, zh in first
+            ],
+        }
+    ]
+    if extra_unit:
+        units.append(
+            {
+                "id": "u2",
+                "title": "Unit 2 · Fruit",
+                "words": [{"en": "cherry", "zh": "n. 樱桃", "phonetic": "/ˈtʃeri/"}],
+            }
+        )
     return {
         "id": book_id,
         "title": title,
         "stage": "senior",
         "edition": "TEST",
         "source": "pytest",
-        "units": [
-            {
-                "id": "u1",
-                "title": "Unit 1 · Greetings",
-                "words": [
-                    {
-                        "en": "apple",
-                        "zh": "n. 苹果",
-                        "phonetic": "/ˈæpəl/",
-                    },
-                    {
-                        "en": "banana",
-                        "zh": "n. 香蕉",
-                        "phonetic": "/bəˈnɑːnə/",
-                    },
-                ],
-            }
-        ],
+        "units": units,
     }
 
 
@@ -54,10 +62,18 @@ def write_config(
     wordbooks = tmp_path / "wordbooks"
     wordbooks.mkdir(exist_ok=True)
     (wordbooks / "alpha.json").write_text(
-        json.dumps(sample_wordbook("alpha", "Alpha Book")), encoding="utf-8"
+        json.dumps(sample_wordbook("alpha", "Alpha Book", extra_unit=True)),
+        encoding="utf-8",
     )
     (wordbooks / "beta.json").write_text(
-        json.dumps(sample_wordbook("beta", "Beta Book")), encoding="utf-8"
+        json.dumps(
+            sample_wordbook(
+                "beta",
+                "Beta Book",
+                words=[("date", "n. 枣"), ("elderberry", "n. 接骨木果")],
+            )
+        ),
+        encoding="utf-8",
     )
     settings: dict[str, Any] = {
         "state_file": "data/preferences.json",
@@ -88,6 +104,7 @@ def write_config(
             "max_bytes": 1048576,
             "cache_dir": str(tmp_path / "audio-cache"),
             "cache_ttl_hours": 24,
+            "prefetch": False,
         },
         "security": {
             "trust_proxy_headers": False,

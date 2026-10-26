@@ -39,6 +39,7 @@ class AudioConfig:
     max_bytes: int
     cache_dir: Path
     cache_ttl_seconds: int
+    prefetch: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +167,11 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> AppConfig:
     cache_ttl_hours = _integer(
         audio_section, "cache_ttl_hours", 720, minimum=1, maximum=87600
     )
+    audio_prefetch = (
+        _env_bool("LITTLEFLASH_AUDIO_PREFETCH")
+        if os.environ.get("LITTLEFLASH_AUDIO_PREFETCH") is not None
+        else _boolean(audio_section, "prefetch", True)
+    )
 
     security = SecurityConfig(
         trust_proxy_headers=_env_bool("LITTLEFLASH_TRUST_PROXY")
@@ -216,6 +222,7 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> AppConfig:
             max_bytes=max_bytes,
             cache_dir=cache_dir,
             cache_ttl_seconds=cache_ttl_hours * 3600,
+            prefetch=audio_prefetch,
         ),
         security=security,
     )

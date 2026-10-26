@@ -16,8 +16,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from .config import AudioConfig
 from .wordbooks import WordbookManager
@@ -84,6 +86,10 @@ class AudioStore:
         self.manager = manager
         self._locks_guard = threading.Lock()
         self._locks: dict[str, threading.Lock] = {}
+        self._prefetch_guard = threading.Lock()
+        self._prefetch_queue: deque[str] = deque()
+        self._prefetch_seen: set[str] = set()
+        self._prefetch_thread: threading.Thread | None = None
 
     def get(self, word: str) -> AudioAsset:
         if not self.config.enabled:
@@ -92,14 +98,11 @@ class AudioStore:
         if canonical is None:
             raise UnknownAudioWord()
 
-        cache_key = hashlib.sha256(
-            f"youdao:{self.config.voice_type}:{canonical}".encode("utf-8")
-        ).hexdigest()
-        cached = self.config.cache_dir / f"{cache_key}.mp3"
+        cached = self._cache_path(canonical)
         if self._is_fresh(cached):
             return AudioAsset(cached)
 
-        lock = self._lock_for(cache_key)
+        lock = self._lock_for(canonical)
         with lock:
             if self._is_fresh(cached):
                 return AudioAsset(cached)
@@ -113,6 +116,68 @@ class AudioStore:
                     return AudioAsset(cached)
                 raise
         return AudioAsset(cached)
+
+    def prefetch(self, words: Iterable[str], *, limit: int = 800) -> int:
+        """把选中范围内的发音排进后台队列，提前下载到本地缓存。
+
+        只做尽力而为的预热：不阻塞请求、失败静默重试，且跳过仍然新鲜的缓存。
+        返回本次实际入队的单词数。
+        """
+        if not self.config.enabled or not self.config.prefetch:
+            return 0
+        queued = 0
+        with self._prefetch_guard:
+            if len(self._prefetch_seen) > 50000:
+                self._prefetch_seen.clear()
+            for word in words:
+                if queued >= limit:
+                    break
+                canonical = self.manager.canonical_audio_word(word)
+                if not canonical or canonical in self._prefetch_seen:
+                    continue
+                if self._is_fresh(self._cache_path(canonical)):
+                    self._prefetch_seen.add(canonical)
+                    continue
+                self._prefetch_seen.add(canonical)
+                self._prefetch_queue.append(canonical)
+                queued += 1
+            if queued and (
+                self._prefetch_thread is None or not self._prefetch_thread.is_alive()
+            ):
+                self._prefetch_thread = threading.Thread(
+                    target=self._prefetch_worker,
+                    name="littleflash-audio-prefetch",
+                    daemon=True,
+                )
+                self._prefetch_thread.start()
+        if queued:
+            logger.info("音频预缓存：本次入队 %s 个单词", queued)
+        return queued
+
+    def _prefetch_worker(self) -> None:
+        while True:
+            with self._prefetch_guard:
+                if not self._prefetch_queue:
+                    self._prefetch_thread = None
+                    return
+                word = self._prefetch_queue.popleft()
+            try:
+                self.get(word)
+            except Exception as exc:  # noqa: BLE001 - 预热失败不应影响服务
+                with self._prefetch_guard:
+                    self._prefetch_seen.discard(word)
+                logger.debug("音频预缓存失败 %s：%s", word, exc)
+            time.sleep(0.15)
+
+    def cache_path(self, word: str) -> Path | None:
+        canonical = self.manager.canonical_audio_word(word)
+        return self._cache_path(canonical) if canonical else None
+
+    def _cache_path(self, canonical: str) -> Path:
+        cache_key = hashlib.sha256(
+            f"youdao:{self.config.voice_type}:{canonical}".encode("utf-8")
+        ).hexdigest()
+        return self.config.cache_dir / f"{cache_key}.mp3"
 
     def _is_fresh(self, path: Path) -> bool:
         try:

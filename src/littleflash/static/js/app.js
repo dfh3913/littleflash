@@ -69,6 +69,8 @@
     kindOrder: ["en", "zh"],
     mode: "auto",
     order: "sequence",
+    seed: "",
+    selectionQuery: "",
     intervalSeconds: 4,
     autoRunning: false,
     round: 1,
@@ -143,31 +145,25 @@
         return;
       }
 
-      let bookMeta = null;
-      for (let i = 0; i < state.books.length; i += 1) {
-        if (state.books[i].id === state.prefs.wordbook_id) {
-          bookMeta = state.books[i];
-          break;
-        }
-      }
-      if (!bookMeta) bookMeta = state.books[0];
+      const selections = LF.normalizeSelections(state.prefs, state.books);
+      state.selectionQuery = LF.selectionQuery(selections);
+      state.book = summarizeSelection(selections, state.books);
 
+      // 一次拿到当前选择范围内的全部单词，避免逐本词书发请求。
       const response = await LF.api(
-        "/api/wordbooks/" + encodeURIComponent(bookMeta.id),
-        { timeout: 16000 }
+        "/api/deck?s=" + encodeURIComponent(state.selectionQuery),
+        { timeout: 20000 }
       );
-      if (!response || !response.book || !Array.isArray(response.book.units)) {
+      if (!response || !Array.isArray(response.deck)) {
         throw new LF.ApiError("词书内容不完整", 0, "invalid_wordbook");
       }
 
-      state.book = response.book;
       applyPreferences();
-      // prepareDeck 依赖 state.order，必须先应用偏好再组牌。
-      prepareDeck();
+      prepareDeck(response.deck);
       if (state.deck.length === 0) {
         showEmptyState(
           "这个范围还没有单词",
-          "换一个单元或整本词书试试，学习范围可以在设置页调整。"
+          "换一个单元或词书试试，学习范围可以在设置页调整。"
         );
         return;
       }
@@ -185,7 +181,10 @@
       updateAudioUI();
       updatePlayerUI();
       setLibraryStatus("ready", state.books.length + " 本词书在线");
-      document.title = "闪词 · " + state.book.title;
+      document.title =
+        state.book.id === "__multi__"
+          ? "闪词 · 多本词书"
+          : "闪词 · " + state.book.title;
 
       scheduleAuto();
       window.setTimeout(function () {
@@ -203,55 +202,73 @@
   function applyPreferences() {
     const prefs = state.prefs || {};
     state.mode = prefs.mode === "manual" ? "manual" : "auto";
-    state.order = prefs.order === "shuffle" ? "shuffle" : "sequence";
+    state.order =
+      prefs.order === "random" || prefs.order === "shuffle"
+        ? "random"
+        : "sequence";
+    state.seed = LF.sanitizeSeed(prefs.seed, "littleflash");
     state.intervalSeconds = clampNumber(prefs.interval_seconds, 1, 30, 4);
     state.kindOrder = prefs.front === "zh" ? ["zh", "en"] : ["en", "zh"];
     state.autoRunning = state.mode === "auto";
   }
 
-  function prepareDeck() {
-    const book = state.book;
-    const preferenceUnit =
-      state.prefs && state.prefs.unit_id ? String(state.prefs.unit_id) : "all";
-    let units = book.units;
-
-    if (preferenceUnit !== "all") {
-      const selected = book.units.filter(function (unit) {
-        return unit.id === preferenceUnit;
-      });
-      if (selected.length > 0) {
-        units = selected;
-      }
+  function summarizeSelection(selections, books) {
+    const byId = new Map();
+    books.forEach(function (book) {
+      byId.set(book.id, book);
+    });
+    const chosen = [];
+    selections.forEach(function (selection) {
+      const book = byId.get(selection.wordbook_id);
+      if (book) chosen.push(book);
+    });
+    if (chosen.length === 1) {
+      return chosen[0];
     }
+    return {
+      id: "__multi__",
+      title: "多本词书",
+      stage: chosen.length + " 本词书",
+      edition: "",
+      units: [],
+    };
+  }
 
+  function prepareDeck(items) {
     const deck = [];
-    units.forEach(function (unit) {
-      if (!Array.isArray(unit.words)) return;
-      unit.words.forEach(function (word) {
-        if (!word || typeof word.en !== "string" || !word.en) return;
-        deck.push({
-          en: word.en,
-          zh: typeof word.zh === "string" ? word.zh : "",
-          phonetic: typeof word.phonetic === "string" ? word.phonetic : "",
-          unitId: unit.id,
-          unitTitle: unit.title || "未命名单元",
-        });
+    (items || []).forEach(function (word) {
+      if (!word || typeof word.en !== "string" || !word.en) return;
+      deck.push({
+        en: word.en,
+        zh: typeof word.zh === "string" ? word.zh : "",
+        phonetic: typeof word.phonetic === "string" ? word.phonetic : "",
+        bookId: typeof word.bookId === "string" ? word.bookId : "",
+        bookTitle: typeof word.bookTitle === "string" ? word.bookTitle : "",
+        unitId: typeof word.unitId === "string" ? word.unitId : "",
+        unitTitle: word.unitTitle || "未命名单元",
       });
     });
-
-    if (state.order === "shuffle") {
-      shuffleInPlace(deck);
-    }
     state.deck = deck;
     state.index = 0;
+    if (state.order === "random") {
+      LF.shuffleWithSeed(state.deck, roundSeed(1));
+    }
+  }
+
+  function roundSeed(round) {
+    return state.seed + "#" + round;
   }
 
   function setupPage() {
     const book = state.book;
     const details = [];
-    const stageLabel = LF.formatStageLabel(book.stage);
-    if (stageLabel) details.push(stageLabel);
-    if (book.edition) details.push(book.edition);
+    if (book.id === "__multi__") {
+      details.push(book.stage);
+    } else {
+      const stageLabel = LF.formatStageLabel(book.stage);
+      if (stageLabel) details.push(stageLabel);
+      if (book.edition) details.push(book.edition);
+    }
 
     dom.bookTitle.textContent = book.title;
     dom.bookTitle.title = book.title;
@@ -309,8 +326,9 @@
     }
 
     dom.unitLabel.textContent = word.unitTitle;
-    dom.unitLabel.title =
-      (state.book ? state.book.title + " · " : "") + word.unitTitle;
+    dom.unitLabel.title = [word.bookTitle, word.unitTitle]
+      .filter(Boolean)
+      .join(" · ");
 
     if (animate && !LF.prefersReducedMotion()) {
       dom.cardContent.classList.remove("is-updating");
@@ -379,7 +397,7 @@
     const wasLast = state.index === total - 1;
     if (wasLast && total > 1) {
       state.round += 1;
-      if (state.order === "shuffle") {
+      if (state.order === "random") {
         reshuffleDeck();
       }
       LF.toast("完成一轮，继续保持这个节奏。", {
@@ -892,25 +910,15 @@
     return Math.min(maximum, Math.max(minimum, number));
   }
 
-  function shuffleInPlace(array) {
-    for (let index = array.length - 1; index > 0; index -= 1) {
-      const random = Math.floor(Math.random() * (index + 1));
-      const temporary = array[index];
-      array[index] = array[random];
-      array[random] = temporary;
-    }
-  }
-
-  /* 乱序模式下每开始新一轮都重新洗牌，并避免与刚看过的词立刻重复。 */
+  /* 随机模式下每开始新一轮都用「种子 + 轮次」重新洗牌，顺序可复现。 */
   function reshuffleDeck() {
     const deck = state.deck;
     if (deck.length < 2) return;
     const previous = deck[state.index];
-    shuffleInPlace(deck);
+    LF.shuffleWithSeed(deck, roundSeed(state.round));
     if (deck[0] === previous) {
-      const swapWith = 1 + Math.floor(Math.random() * (deck.length - 1));
-      deck[0] = deck[swapWith];
-      deck[swapWith] = previous;
+      deck[0] = deck[1];
+      deck[1] = previous;
     }
   }
 

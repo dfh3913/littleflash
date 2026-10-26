@@ -4,6 +4,11 @@ These are intentionally separate from config.yml: they can be edited from the
 password-protected settings page, while the YAML file remains the place for
 server/deployment secrets.  Writes are atomic and file-locked so multiple
 gunicorn workers cannot corrupt the JSON state.
+
+0.1.3 起支持：
+- ``selections``：同时选择多本词书、每本书的多个单元；
+- ``seed``：随机顺序的种子（中英文/数字字符串），相同种子顺序稳定；
+- ``audio_prefetch``：是否在后台预拉取并缓存发音（管理员可配）。
 """
 
 from __future__ import annotations
@@ -11,13 +16,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
-from .wordbooks import WordbookManager
+from .wordbooks import Unit, Wordbook, WordbookManager
 
 try:
     import fcntl
@@ -29,63 +35,225 @@ logger = logging.getLogger(__name__)
 MAX_STATE_BYTES = 64 * 1024
 
 FRONTS = ("en", "zh")
-ORDERS = ("sequence", "shuffle")
+ORDERS = ("sequence", "random")
 MODES = ("auto", "manual")
 MIN_INTERVAL = 1.0
 MAX_INTERVAL = 30.0
+
+MAX_SEED_LENGTH = 64
+DEFAULT_SEED_LENGTH = 8
+SEED_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+MAX_BOOKS = 50
+MAX_UNITS_PER_BOOK = 200
 
 
 class SettingsValidationError(ValueError):
     """A client-supplied preference value is invalid."""
 
 
-def default_preferences(manager: WordbookManager) -> dict[str, Any]:
+def generate_seed(length: int = DEFAULT_SEED_LENGTH) -> str:
+    """生成一串易读的随机种子（去掉 0/O/1/I 等混淆字符）。"""
+    size = max(4, min(MAX_SEED_LENGTH, int(length)))
+    return "".join(secrets.choice(SEED_ALPHABET) for _ in range(size))
+
+
+def normalize_seed(value: Any, fallback: str | None = None) -> str:
+    """清洗种子：只保留可打印字符，限制长度，空值回落到 fallback。"""
+    if not isinstance(value, str):
+        return fallback or generate_seed()
+    text = "".join(ch for ch in value if ch.isprintable()).strip()
+    if not text:
+        return fallback or generate_seed()
+    return text[:MAX_SEED_LENGTH]
+
+
+def normalize_selections(
+    raw: Any,
+    manager: WordbookManager,
+    *,
+    strict: bool = False,
+) -> list[dict[str, Any]]:
+    """把任意来源的选择清洗成 ``[{"wordbook_id", "unit_ids"}]``。
+
+    - 兼容旧的单本 ``wordbook_id`` / ``unit_id``；
+    - 未知词书会被丢弃（strict=True 时抛错）；
+    - 未知单元会被丢弃（strict=True 时抛错）；
+    - 结果为空时回落到第一本词书的全部单元。
+    """
+    books = manager.books()
+    if not books:
+        return []
+    by_id = {book.id: book for book in books}
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    items = raw if isinstance(raw, list) else []
+    if strict and isinstance(raw, list) and not raw:
+        raise SettingsValidationError("请至少选择一本词书")
+
+    if isinstance(raw, dict):
+        nested = raw.get("selections")
+        if isinstance(nested, list) and nested:
+            items = nested
+        else:
+            # 向后兼容：旧版单本词书 + 单元
+            legacy_book = raw.get("wordbook_id")
+            legacy_unit = raw.get("unit_id")
+            if isinstance(legacy_book, str):
+                items = [
+                    {
+                        "wordbook_id": legacy_book,
+                        "unit_ids": ["all"]
+                        if legacy_unit in (None, "all")
+                        else [legacy_unit],
+                    }
+                ]
+
+    for item in items:
+        if len(result) >= MAX_BOOKS:
+            break
+        if not isinstance(item, dict):
+            if strict:
+                raise SettingsValidationError("词书选择格式无效")
+            continue
+        book_id = item.get("wordbook_id")
+        if not isinstance(book_id, str) or book_id not in by_id:
+            if strict:
+                raise SettingsValidationError("所选词书不存在")
+            continue
+        if book_id in seen:
+            continue
+        book = by_id[book_id]
+        unit_ids = _normalize_unit_ids(item.get("unit_ids"), book, strict=strict)
+        if not unit_ids:
+            if strict:
+                raise SettingsValidationError("请至少选择一个单元")
+            continue
+        seen.add(book_id)
+        result.append({"wordbook_id": book_id, "unit_ids": unit_ids})
+
+    if not result:
+        first = books[0]
+        result = [{"wordbook_id": first.id, "unit_ids": ["all"]}]
+    return result
+
+
+def _normalize_unit_ids(raw: Any, book: Wordbook, *, strict: bool) -> list[str]:
+    if raw is None:
+        return ["all"]
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        if strict:
+            raise SettingsValidationError("单元选择格式无效")
+        return ["all"]
+
+    ids: list[str] = []
+    for value in raw[:MAX_UNITS_PER_BOOK]:
+        if not isinstance(value, str):
+            if strict:
+                raise SettingsValidationError("单元参数无效")
+            continue
+        if value == "all":
+            return ["all"]
+        if book.get_unit(value) is None:
+            if strict:
+                raise SettingsValidationError("所选单元不属于该词书")
+            continue
+        if value not in ids:
+            ids.append(value)
+    return ids or ["all"]
+
+
+def selection_units(
+    manager: WordbookManager,
+    selections: list[dict[str, Any]],
+) -> list[tuple[Wordbook, Unit]]:
+    """展开选择，返回去重后的 (词书, 单元) 列表。"""
+    pairs: list[tuple[Wordbook, Unit]] = []
+    seen: set[tuple[str, str]] = set()
+    for selection in selections:
+        book = manager.get(str(selection.get("wordbook_id", "")))
+        if book is None:
+            continue
+        unit_ids = selection.get("unit_ids") or ["all"]
+        if "all" in unit_ids:
+            units: Iterable[Unit] = book.units
+        else:
+            units = (unit for unit in (book.get_unit(str(uid)) for uid in unit_ids) if unit)
+        for unit in units:
+            key = (book.id, unit.id)
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append((book, unit))
+    return pairs
+
+
+def iter_selected_words(
+    manager: WordbookManager,
+    selections: list[dict[str, Any]],
+) -> Iterator[tuple[Wordbook, Unit, Any]]:
+    for book, unit in selection_units(manager, selections):
+        for word in unit.words:
+            yield book, unit, word
+
+
+def selected_word_count(
+    manager: WordbookManager,
+    selections: list[dict[str, Any]],
+) -> int:
+    return sum(1 for _ in iter_selected_words(manager, selections))
+
+
+def default_preferences(
+    manager: WordbookManager,
+    seed: str | None = None,
+) -> dict[str, Any]:
     book = manager.first_book()
+    selections = [{"wordbook_id": book.id, "unit_ids": ["all"]}] if book else []
     return {
+        "selections": selections,
         "wordbook_id": book.id if book else "",
         "unit_id": "all",
         "front": "en",
         "order": "sequence",
+        "seed": normalize_seed(seed),
         "mode": "auto",
         "interval_seconds": 4.0,
         "audio_enabled": True,
         "audio_volume": 0.8,
+        "audio_prefetch": True,
     }
 
 
-def public_preferences(raw: Any, manager: WordbookManager) -> dict[str, Any]:
-    """Always return a complete, safe set of preferences.
-
-    Stored state is treated as untrusted (it may predate a wordbook deletion),
-    so anomalies fall back to a sensible value instead of breaking the UI.
-    """
-    defaults = default_preferences(manager)
+def public_preferences(
+    raw: Any,
+    manager: WordbookManager,
+    fallback_seed: str | None = None,
+) -> dict[str, Any]:
+    """Always return a complete, safe set of preferences."""
+    defaults = default_preferences(manager, seed=fallback_seed)
     if not isinstance(raw, dict):
         return defaults
 
-    books = manager.books()
-    by_id = {book.id: book for book in books}
-
-    wordbook_id = raw.get("wordbook_id")
-    if not isinstance(wordbook_id, str) or wordbook_id not in by_id:
-        wordbook_id = defaults["wordbook_id"]
-    book = by_id.get(wordbook_id)
-
-    unit_id = raw.get("unit_id")
-    if not isinstance(unit_id, str):
-        unit_id = "all"
-    if unit_id != "all" and (book is None or book.get_unit(unit_id) is None):
-        unit_id = "all"
+    selections = normalize_selections(raw, manager)
 
     front = raw.get("front")
     if front not in FRONTS:
         front = defaults["front"]
+
     order = raw.get("order")
+    if order == "shuffle":  # 0.1.2 及更早版本的旧值
+        order = "random"
     if order not in ORDERS:
         order = defaults["order"]
+
     mode = raw.get("mode")
     if mode not in MODES:
         mode = defaults["mode"]
+
+    seed = normalize_seed(raw.get("seed"), defaults["seed"])
 
     interval = _safe_float(raw.get("interval_seconds"), defaults["interval_seconds"])
     interval = min(MAX_INTERVAL, max(MIN_INTERVAL, round(interval * 2) / 2))
@@ -94,18 +262,28 @@ def public_preferences(raw: Any, manager: WordbookManager) -> dict[str, Any]:
     if not isinstance(audio_enabled, bool):
         audio_enabled = defaults["audio_enabled"]
 
+    audio_prefetch = raw.get("audio_prefetch")
+    if not isinstance(audio_prefetch, bool):
+        audio_prefetch = defaults["audio_prefetch"]
+
     volume = _safe_float(raw.get("audio_volume"), defaults["audio_volume"])
     volume = min(1.0, max(0.0, round(volume, 2)))
 
+    first = selections[0] if selections else {"wordbook_id": "", "unit_ids": ["all"]}
+    first_unit = "all" if "all" in first["unit_ids"] else first["unit_ids"][0]
+
     return {
-        "wordbook_id": wordbook_id,
-        "unit_id": unit_id,
+        "selections": selections,
+        "wordbook_id": first["wordbook_id"],
+        "unit_id": first_unit,
         "front": front,
         "order": order,
+        "seed": seed,
         "mode": mode,
         "interval_seconds": interval,
         "audio_enabled": audio_enabled,
         "audio_volume": volume,
+        "audio_prefetch": audio_prefetch,
     }
 
 
@@ -121,37 +299,41 @@ def validate_update(
     books = manager.books()
     if not books:
         raise SettingsValidationError("词书目录为空，暂时无法保存设置")
-    by_id = {book.id: book for book in books}
-    defaults = default_preferences(manager)
-    merged = {**current}
 
-    if "wordbook_id" in patch:
-        value = patch["wordbook_id"]
-        if not isinstance(value, str) or value not in by_id:
+    merged = public_preferences(current, manager)
+
+    if "selections" in patch:
+        selections = normalize_selections(
+            patch["selections"], manager, strict=True
+        )
+        if not selections:
+            raise SettingsValidationError("请至少选择一本词书")
+        merged["selections"] = selections
+    elif "wordbook_id" in patch or "unit_id" in patch:
+        # 兼容旧客户端：单本词书 + 单个单元
+        book_id = patch.get("wordbook_id", merged["wordbook_id"])
+        unit_id = patch.get("unit_id", merged["unit_id"])
+        if not isinstance(book_id, str) or manager.get(book_id) is None:
             raise SettingsValidationError("所选词书不存在")
-        merged["wordbook_id"] = value
-
-    if "unit_id" in patch:
-        value = patch["unit_id"]
-        if not isinstance(value, str):
-            raise SettingsValidationError("单元参数无效")
-        book = by_id.get(merged["wordbook_id"])
-        if value != "all" and (book is None or book.get_unit(value) is None):
-            raise SettingsValidationError("所选单元不属于当前词书")
-        merged["unit_id"] = value
-
-    book = by_id.get(merged["wordbook_id"], books[0])
-    if merged.get("wordbook_id") not in by_id:
-        merged["wordbook_id"] = book.id
-    if merged.get("unit_id") != "all" and book.get_unit(merged["unit_id"]) is None:
-        merged["unit_id"] = "all"
+        temp = {
+            "selections": [
+                {"wordbook_id": book_id, "unit_ids": ["all"] if unit_id == "all" else [unit_id]}
+            ]
+        }
+        merged["selections"] = normalize_selections(temp, manager, strict=True)
 
     for key, allowed in (("front", FRONTS), ("order", ORDERS), ("mode", MODES)):
         if key in patch:
             value = patch[key]
+            if value == "shuffle" and key == "order":
+                value = "random"
             if value not in allowed:
                 raise SettingsValidationError(f"设置项 {key} 的值无效")
             merged[key] = value
+
+    if "seed" in patch:
+        value = normalize_seed(patch["seed"], "")
+        merged["seed"] = value or generate_seed()
 
     if "interval_seconds" in patch:
         value = patch["interval_seconds"]
@@ -178,9 +360,11 @@ def validate_update(
             raise SettingsValidationError("音量必须在 0 到 1 之间")
         merged["audio_volume"] = round(value, 2)
 
-    # Fill in fields omitted by a partial client payload.
-    for key, value in defaults.items():
-        merged.setdefault(key, value)
+    if "audio_prefetch" in patch:
+        if not isinstance(patch["audio_prefetch"], bool):
+            raise SettingsValidationError("发音预缓存开关的值无效")
+        merged["audio_prefetch"] = patch["audio_prefetch"]
+
     return public_preferences(merged, manager)
 
 
@@ -188,11 +372,12 @@ class SettingsStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._thread_lock = threading.RLock()
+        self._fallback_seed = generate_seed()
 
     def load(self, manager: WordbookManager) -> dict[str, Any]:
         with self._thread_lock:
             raw = self._read_json()
-            return public_preferences(raw, manager)
+            return public_preferences(raw, manager, self._fallback_seed)
 
     def update(
         self,
@@ -200,7 +385,9 @@ class SettingsStore:
         manager: WordbookManager,
     ) -> dict[str, Any]:
         with self._thread_lock, self._file_lock():
-            current = public_preferences(self._read_json(), manager)
+            current = public_preferences(
+                self._read_json(), manager, self._fallback_seed
+            )
             updated = validate_update(patch, current, manager)
             self._write_json(updated)
             return updated
@@ -211,12 +398,16 @@ class SettingsStore:
         manager: WordbookManager,
     ) -> dict[str, Any]:
         with self._thread_lock, self._file_lock():
-            normalized = validate_update(value, default_preferences(manager), manager)
+            normalized = validate_update(
+                value,
+                default_preferences(manager, self._fallback_seed),
+                manager,
+            )
             self._write_json(normalized)
             return normalized
 
     def reset(self, manager: WordbookManager) -> dict[str, Any]:
-        defaults = default_preferences(manager)
+        defaults = default_preferences(manager, generate_seed())
         if not manager.books():
             return defaults
         with self._thread_lock, self._file_lock():
@@ -288,26 +479,18 @@ def sample_word(
     preferences: dict[str, Any],
     manager: WordbookManager,
 ) -> dict[str, str] | None:
-    book = manager.get(str(preferences.get("wordbook_id", "")))
-    if book is None:
-        book = manager.first_book()
-    if book is None:
-        return None
-    unit = None
-    unit_id = preferences.get("unit_id")
-    if unit_id != "all":
-        unit = book.get_unit(str(unit_id))
-    if unit is None and unit_id != "all":
-        return None
-    units = (unit,) if unit is not None else book.units
-    for candidate in units:
-        if candidate.words:
-            word = candidate.words[0]
+    selections = preferences.get("selections")
+    if not isinstance(selections, list):
+        selections = normalize_selections(preferences, manager)
+    for book, unit in selection_units(manager, selections):
+        if unit.words:
+            word = unit.words[0]
             return {
                 "en": word.en,
                 "zh": word.zh,
                 "phonetic": word.phonetic,
-                "unitTitle": candidate.title,
+                "bookTitle": book.title,
+                "unitTitle": unit.title,
             }
     return None
 

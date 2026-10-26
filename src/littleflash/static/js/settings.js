@@ -1,4 +1,4 @@
-/* LittleFlash · settings page */
+/* LittleFlash · settings page（多词书 / 多单元 / 随机种子 / 音频预缓存） */
 (function () {
   "use strict";
 
@@ -11,7 +11,7 @@
   initSettings();
 
   /* =====================================================================
-     Password gate
+     管理员登录（0.1.x 仍是单一设置密码）
      ===================================================================== */
   function initLogin() {
     const form = $("loginForm");
@@ -26,24 +26,20 @@
     let lockTimer = null;
     let lockUntil = 0;
 
-    if (reveal) {
+    if (reveal && input) {
       reveal.addEventListener("click", function () {
         const show = input.type === "password";
         input.type = show ? "text" : "password";
         reveal.setAttribute("aria-label", show ? "隐藏密码" : "显示密码");
         reveal.title = show ? "隐藏密码" : "显示密码";
-        const on = reveal.querySelector(".reveal-on");
-        const off = reveal.querySelector(".reveal-off");
-        LF.setHidden(on, show);
-        LF.setHidden(off, !show);
+        LF.setHidden(reveal.querySelector(".reveal-on"), show);
+        LF.setHidden(reveal.querySelector(".reveal-off"), !show);
         input.focus();
       });
     }
 
     if (input) {
-      input.addEventListener("input", function () {
-        hideError();
-      });
+      input.addEventListener("input", hideError);
       window.setTimeout(function () {
         input.focus({ preventScroll: true });
       }, 250);
@@ -95,8 +91,7 @@
       }
       showError(requestError.message || "验证失败，请稍后再试");
       if (requestError.status === 429) {
-        const seconds = Math.max(1, Number(requestError.retryAfter) || 30);
-        startLock(seconds);
+        startLock(Math.max(1, Number(requestError.retryAfter) || 30));
       } else if (
         requestError.code === "csrf_failed" ||
         (requestError.status === 400 && /令牌/.test(requestError.message || ""))
@@ -146,7 +141,7 @@
   }
 
   /* =====================================================================
-     Settings form
+     设置表单
      ===================================================================== */
   function initSettings() {
     const form = $("settingsForm");
@@ -154,19 +149,20 @@
 
     const dom = {
       form: form,
-      wordbook: $("wordbookSelect"),
-      unit: $("unitSelect"),
+      bookPicker: $("bookPicker"),
+      pickerSummary: $("pickerSummary"),
       saveStatus: $("saveStatus"),
       saveStatusText: $("saveStatusText"),
       saveRetry: $("saveRetry"),
-      currentBookTitle: $("currentBookTitle"),
-      currentBookMeta: $("currentBookMeta"),
-      currentBookCount: $("currentBookCount"),
+      seedField: $("seedField"),
+      seedInput: $("seedInput"),
+      seedRefresh: $("seedRefresh"),
       intervalField: $("intervalField"),
       intervalRange: $("intervalRange"),
       intervalOutput: $("intervalOutput"),
       intervalHint: $("intervalHint"),
       audioToggle: $("audioToggle"),
+      audioPrefetchToggle: $("audioPrefetchToggle"),
       volumeField: $("volumeField"),
       volumeRange: $("volumeRange"),
       volumeOutput: $("volumeOutput"),
@@ -175,6 +171,8 @@
       cancelReset: $("cancelReset"),
       confirmReset: $("confirmReset"),
       logoutBtn: $("logoutBtn"),
+      toggleLogin: $("toggleLogin"),
+      adminLogin: $("adminLogin"),
       previewCard: $("previewCard"),
       previewFaceLabel: $("previewFaceLabel"),
       previewWordBlock: $("previewWordBlock"),
@@ -187,16 +185,13 @@
       previewCaption: $("previewCaption"),
       previewProgress: $("previewProgress"),
       previewSound: $("previewSound"),
-      toggleLogin: $("toggleLogin"),
-      adminLogin: $("adminLogin"),
     };
 
     const modeMeta = document.querySelector('meta[name="settings-mode"]');
-    const localMode =
-      !modeMeta || modeMeta.getAttribute("content") !== "server";
+    const localMode = !modeMeta || modeMeta.getAttribute("content") !== "server";
 
     const state = {
-      hasBooks: Boolean(dom.wordbook && dom.wordbook.options.length > 0),
+      hasBooks: Boolean(dom.bookPicker && dom.bookPicker.querySelector(".book-pick")),
       localMode: localMode,
       saving: false,
       hasUnsaved: false,
@@ -204,12 +199,11 @@
       pendingWhileSaving: false,
       saveTimer: null,
       redirectTimer: null,
+      previewRequest: 0,
       sample: readInitialSample(),
       previewFace: 0,
       previewTimer: null,
       previewHidden: document.hidden,
-      bookCache: new Map(),
-      unitRequestToken: 0,
       resetBusy: false,
     };
 
@@ -227,169 +221,267 @@
 
     async function boot() {
       if (state.localMode) {
-        await applyLocalPreferences();
+        applyLocalPreferences();
       }
+      syncBookUi();
       syncRangeVisuals();
       syncIntervalUi(false);
       syncVolumeUi();
       syncAudioUi();
-      updateBookSummaryFromOption();
+      syncSeedUi();
       renderPreview();
       setupPreviewTimer();
+      updatePreviewCaption();
       setSaveStatus("saved", savedLabel());
+      if (dom.seedInput && !LF.sanitizeSeed(dom.seedInput.value) && getOrder() === "random") {
+        dom.seedInput.value = LF.generateSeed();
+        syncSeedUi();
+        queueSave();
+      }
     }
 
     function savedLabel() {
       return state.localMode ? "已保存到本机" : "所有更改已保存";
     }
 
-    /* 本机存储里的设置优先于服务端默认值，仅影响当前浏览器。 */
-    async function applyLocalPreferences() {
+    /* ------------------------------------------------------ 本机设置恢复 */
+    function applyLocalPreferences() {
       const stored = LF.localPrefs.read();
       if (!stored) return;
 
-      const bookId = stored.wordbook_id;
-      const hasBook =
-        bookId &&
-        Array.prototype.some.call(dom.wordbook.options, function (option) {
-          return option.value === bookId;
-        });
+      const selections = LF.normalizeSelections(stored, booksFromDom());
+      applySelections(selections);
 
-      if (hasBook && dom.wordbook.value !== bookId) {
-        dom.wordbook.value = bookId;
-        updateBookSummaryFromOption();
-        try {
-          const book = await ensureBook(bookId);
-          fillUnits(book, stored.unit_id || "all");
-          updateBookSummaryFromBook(book);
-          state.sample = sampleFromBook(book, dom.unit.value);
-        } catch (error) {
-          dom.unit.replaceChildren(makeOption("all", "整本词书"));
+      setChoice("front", stored.front === "zh" ? "zh" : "en");
+      setChoice("order", stored.order === "random" || stored.order === "shuffle" ? "random" : "sequence");
+      setChoice("mode", stored.mode === "manual" ? "manual" : "auto");
+
+      if (stored.seed && dom.seedInput) {
+        dom.seedInput.value = LF.sanitizeSeed(stored.seed);
+      }
+
+      if (dom.intervalRange) {
+        const interval = Number(stored.interval_seconds);
+        if (isFinite(interval)) {
+          dom.intervalRange.value = String(Math.min(30, Math.max(1, interval)));
         }
-      } else if (stored.unit_id) {
-        const hasUnit = Array.prototype.some.call(dom.unit.options, function (option) {
-          return option.value === stored.unit_id;
-        });
-        if (hasUnit) dom.unit.value = stored.unit_id;
       }
-
-      if (stored.front) setChoice("front", stored.front);
-      if (stored.order) setChoice("order", stored.order);
-      if (stored.mode) setChoice("mode", stored.mode);
-      if (stored.interval_seconds !== undefined) {
-        dom.intervalRange.value = stored.interval_seconds;
-      }
-      if (typeof stored.audio_enabled === "boolean") {
+      if (dom.audioToggle && typeof stored.audio_enabled === "boolean") {
         dom.audioToggle.checked = stored.audio_enabled;
       }
-      if (stored.audio_volume !== undefined) {
-        dom.volumeRange.value = Math.round(stored.audio_volume * 100);
+      if (dom.audioPrefetchToggle && typeof stored.audio_prefetch === "boolean") {
+        dom.audioPrefetchToggle.checked = stored.audio_prefetch;
+      }
+      if (dom.volumeRange) {
+        const volume = Number(stored.audio_volume);
+        if (isFinite(volume)) {
+          dom.volumeRange.value = String(Math.round(Math.min(1, Math.max(0, volume)) * 100));
+        }
       }
     }
 
-    function setChoice(name, value) {
-      const input = document.querySelector(
-        'input[name="' + name + '"][value="' + value + '"]'
-      );
-      if (input) input.checked = true;
+    function booksFromDom() {
+      const books = [];
+      dom.bookPicker.querySelectorAll(".book-pick").forEach(function (bookEl) {
+        const check = bookEl.querySelector(".book-pick__check");
+        if (!check) return;
+        const units = [];
+        bookEl.querySelectorAll(".unit-pick").forEach(function (unitEl) {
+          const unitCheck = unitEl.querySelector(".unit-pick__check");
+          if (!unitCheck) return;
+          units.push({
+            id: unitCheck.value,
+            title: unitEl.querySelector("span") ? unitEl.querySelector("span").textContent : "",
+            wordCount: Number(unitEl.getAttribute("data-word-count")) || 0,
+          });
+        });
+        books.push({
+          id: check.value,
+          title: bookEl.querySelector(".book-pick__title")
+            ? bookEl.querySelector(".book-pick__title").textContent
+            : check.value,
+          units: units,
+        });
+      });
+      return books;
     }
 
-    /* ---------------------------------------------------------------- events */
+    /* ------------------------------------------------------------ 词书选择 */
     function bindFormEvents() {
-      dom.form.addEventListener("submit", function (event) {
-        event.preventDefault();
-      });
+      if (dom.bookPicker) {
+        dom.bookPicker.addEventListener("change", function (event) {
+          const target = event.target;
+          if (!(target instanceof HTMLInputElement)) return;
+          if (target.classList.contains("book-pick__check")) {
+            const bookEl = target.closest(".book-pick");
+            bookEl.querySelectorAll(".unit-pick__check").forEach(function (unitCheck) {
+              unitCheck.checked = target.checked;
+            });
+            syncBookUi();
+            queueSave();
+            requestPreview();
+          } else if (target.classList.contains("unit-pick__check")) {
+            const bookEl = target.closest(".book-pick");
+            const bookCheck = bookEl.querySelector(".book-pick__check");
+            const anyChecked = Array.prototype.some.call(
+              bookEl.querySelectorAll(".unit-pick__check"),
+              function (check) {
+                return check.checked;
+              }
+            );
+            bookCheck.checked = anyChecked;
+            syncBookUi();
+            queueSave();
+            requestPreview();
+          }
+        });
 
-      dom.wordbook.addEventListener("change", handleWordbookChange);
-      dom.unit.addEventListener("change", handleUnitChange);
+        dom.bookPicker.addEventListener("click", function (event) {
+          const button = event.target.closest("[data-unit-all], [data-unit-none]");
+          if (!button) return;
+          event.preventDefault();
+          const bookId =
+            button.getAttribute("data-unit-all") ||
+            button.getAttribute("data-unit-none");
+          const bookEl = dom.bookPicker.querySelector(
+            '.book-pick[data-book-id="' + CSS.escape(bookId) + '"]'
+          );
+          if (!bookEl) return;
+          const selectAll = button.hasAttribute("data-unit-all");
+          bookEl.querySelector(".book-pick__check").checked = selectAll;
+          bookEl.querySelectorAll(".unit-pick__check").forEach(function (unitCheck) {
+            unitCheck.checked = selectAll;
+          });
+          syncBookUi();
+          queueSave();
+          requestPreview();
+        });
+      }
 
       document.querySelectorAll('input[name="front"]').forEach(function (input) {
         input.addEventListener("change", function () {
-          state.previewFace = 0;
-          renderPreview();
-          setupPreviewTimer();
           queueSave();
+          renderPreview();
+          updatePreviewCaption();
         });
       });
 
       document.querySelectorAll('input[name="order"]').forEach(function (input) {
         input.addEventListener("change", function () {
+          syncSeedUi(true);
           queueSave();
+          renderPreview();
+          updatePreviewCaption();
         });
       });
 
       document.querySelectorAll('input[name="mode"]').forEach(function (input) {
         input.addEventListener("change", function () {
           syncIntervalUi(true);
-          setupPreviewTimer();
           queueSave();
         });
       });
 
-      dom.intervalRange.addEventListener("input", function () {
-        syncIntervalUi(false);
-        setupPreviewTimer();
-        queueSave();
-      });
-      dom.intervalRange.addEventListener("change", function () {
-        queueSave();
-      });
+      if (dom.intervalRange) {
+        dom.intervalRange.addEventListener("input", function () {
+          syncIntervalUi(false);
+          setupPreviewTimer();
+          queueSave();
+        });
+        dom.intervalRange.addEventListener("change", function () {
+          queueSave();
+        });
+      }
 
-      dom.audioToggle.addEventListener("change", function () {
-        syncAudioUi();
-        queueSave();
-      });
+      if (dom.audioToggle) {
+        dom.audioToggle.addEventListener("change", function () {
+          syncAudioUi();
+          queueSave();
+        });
+      }
 
-      dom.volumeRange.addEventListener("input", function () {
-        syncVolumeUi();
-        updatePreviewAudioVolume();
-        queueSave();
-      });
-      dom.volumeRange.addEventListener("change", function () {
-        queueSave();
-      });
+      if (dom.audioPrefetchToggle) {
+        dom.audioPrefetchToggle.addEventListener("change", function () {
+          queueSave();
+        });
+      }
 
-      dom.previewCard.addEventListener("click", function (event) {
-        if (event.target instanceof Element && event.target.closest("button")) {
-          return;
-        }
-        flipPreview();
-      });
+      if (dom.volumeRange) {
+        dom.volumeRange.addEventListener("input", function () {
+          syncVolumeUi();
+          queueSave();
+        });
+        dom.volumeRange.addEventListener("change", function () {
+          queueSave();
+        });
+      }
 
-      dom.previewCard.addEventListener("keydown", function (event) {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
+      if (dom.seedInput) {
+        dom.seedInput.addEventListener("input", function () {
+          const clean = LF.sanitizeSeed(dom.seedInput.value);
+          if (dom.seedInput.value !== clean) dom.seedInput.value = clean;
+          queueSave();
+        });
+        dom.seedInput.addEventListener("change", function () {
+          if (!LF.sanitizeSeed(dom.seedInput.value)) {
+            dom.seedInput.value = LF.generateSeed();
+          }
+          queueSave({ immediate: true });
+        });
+      }
+
+      if (dom.seedRefresh) {
+        dom.seedRefresh.addEventListener("click", function () {
+          if (!dom.seedInput) return;
+          dom.seedInput.value = LF.generateSeed();
+          queueSave({ immediate: true });
+          LF.toast("已换一个新的随机种子", { type: "success", duration: 2000 });
+        });
+      }
+
+      if (dom.previewCard) {
+        dom.previewCard.addEventListener("click", function (event) {
+          if (event.target instanceof Element && event.target.closest("button")) return;
           flipPreview();
-        }
-      });
+        });
+        dom.previewCard.addEventListener("keydown", function (event) {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            flipPreview();
+          }
+        });
+      }
 
-      dom.previewSound.addEventListener("click", function (event) {
-        event.stopPropagation();
-        playPreviewAudio();
-      });
+      if (dom.previewSound) {
+        dom.previewSound.addEventListener("click", function (event) {
+          event.stopPropagation();
+          playPreviewAudio();
+        });
+      }
 
-      dom.saveRetry.addEventListener("click", function () {
-        state.saveFailed = false;
-        queueSave({ immediate: true });
-      });
+      if (dom.saveRetry) {
+        dom.saveRetry.addEventListener("click", function () {
+          state.saveFailed = false;
+          queueSave({ immediate: true });
+        });
+      }
 
-      dom.resetBtn.addEventListener("click", openResetDialog);
-      dom.cancelReset.addEventListener("click", function () {
-        if (dom.resetDialog && dom.resetDialog.open) dom.resetDialog.close();
-      });
-      dom.confirmReset.addEventListener("click", confirmReset);
-
+      if (dom.resetBtn) dom.resetBtn.addEventListener("click", openResetDialog);
+      if (dom.cancelReset) {
+        dom.cancelReset.addEventListener("click", function () {
+          if (dom.resetDialog && dom.resetDialog.open) dom.resetDialog.close();
+        });
+      }
+      if (dom.confirmReset) dom.confirmReset.addEventListener("click", confirmReset);
       if (dom.resetDialog) {
         dom.resetDialog.addEventListener("close", function () {
           window.setTimeout(function () {
-            dom.resetBtn.focus({ preventScroll: true });
+            if (dom.resetBtn) dom.resetBtn.focus({ preventScroll: true });
           }, 20);
         });
       }
 
-      if (dom.logoutBtn) {
-        dom.logoutBtn.addEventListener("click", handleLogout);
-      }
+      if (dom.logoutBtn) dom.logoutBtn.addEventListener("click", handleLogout);
 
       if (dom.toggleLogin && dom.adminLogin) {
         dom.toggleLogin.addEventListener("click", function () {
@@ -425,301 +517,277 @@
       });
 
       previewAudio.addEventListener("ended", function () {
-        dom.previewSound.classList.remove("is-playing");
+        if (dom.previewSound) dom.previewSound.classList.remove("is-playing");
       });
       previewAudio.addEventListener("error", function () {
-        dom.previewSound.classList.remove("is-playing");
+        if (dom.previewSound) dom.previewSound.classList.remove("is-playing");
       });
     }
 
-    /* -------------------------------------------------------------- book/unit */
-    async function handleWordbookChange() {
-      updateBookSummaryFromOption();
-      state.unitRequestToken += 1;
-      const token = state.unitRequestToken;
-      const bookId = dom.wordbook.value;
-
-      dom.unit.replaceChildren(makeOption("all", "整本词书"));
-      dom.unit.value = "all";
-      dom.unit.disabled = true;
-      queueSave();
-
-      try {
-        const book = await ensureBook(bookId);
-        if (token !== state.unitRequestToken || dom.wordbook.value !== bookId) return;
-        fillUnits(book, "all");
-        updateBookSummaryFromBook(book);
-        state.sample = sampleFromBook(book, "all");
-        state.previewFace = 0;
-        renderPreview();
-        setupPreviewTimer();
-      } catch (error) {
-        if (token !== state.unitRequestToken) return;
-        LF.toast(
-          "词书内容加载失败：" + (error.message || "请稍后重试"),
-          { type: "error", duration: 4200 }
-        );
-      } finally {
-        if (token === state.unitRequestToken) {
-          dom.unit.disabled = false;
-        }
-      }
-    }
-
-    async function handleUnitChange() {
-      queueSave();
-      const bookId = dom.wordbook.value;
-      const unitId = dom.unit.value || "all";
-      try {
-        const book = await ensureBook(bookId);
-        if (dom.wordbook.value !== bookId || dom.unit.value !== unitId) return;
-        state.sample = sampleFromBook(book, unitId);
-        state.previewFace = 0;
-        renderPreview();
-        setupPreviewTimer();
-      } catch (error) {
-        LF.toast("单元预览加载失败，请稍后再试。", { type: "error" });
-      }
-    }
-
-    function fillUnits(book, desiredUnit) {
-      dom.unit.replaceChildren(makeOption("all", "整本词书"));
-      (book.units || []).forEach(function (unit) {
-        dom.unit.appendChild(
-          makeOption(
-            unit.id,
-            (unit.title || "未命名单元") + " · " + (unit.wordCount || 0) + " 词"
-          )
-        );
-      });
-      const values = Array.prototype.map.call(dom.unit.options, function (option) {
-        return option.value;
-      });
-      dom.unit.value = values.indexOf(desiredUnit) !== -1 ? desiredUnit : "all";
-      dom.unit.disabled = false;
-    }
-
-    function makeOption(value, label) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      return option;
-    }
-
-    async function ensureBook(bookId) {
-      if (state.bookCache.has(bookId)) return state.bookCache.get(bookId);
-      const response = await LF.api(
-        "/api/wordbooks/" + encodeURIComponent(bookId),
-        { timeout: 16000 }
+    function setChoice(name, value) {
+      const input = document.querySelector(
+        'input[name="' + name + '"][value="' + value + '"]'
       );
-      if (!response || !response.book) {
-        throw new LF.ApiError("词书内容为空", 0, "invalid_wordbook");
-      }
-      state.bookCache.set(bookId, response.book);
-      return response.book;
+      if (input) input.checked = true;
     }
 
-    function updateBookSummaryFromOption() {
-      const option =
-        dom.wordbook.options[dom.wordbook.selectedIndex] ||
-        dom.wordbook.options[0];
-      if (!option) return;
-      const unitCount = option.dataset.unitCount || "—";
-      const wordCount = option.dataset.wordCount || "0";
-      const meta = [
-        LF.formatStageLabel(option.dataset.stage),
-        option.dataset.edition,
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      dom.currentBookTitle.textContent =
-        option.dataset.title || option.textContent.trim();
-      dom.currentBookMeta.textContent =
-        (meta || "本地词书") + " · " + unitCount + " 个单元";
-      dom.currentBookCount.textContent = wordCount + " 词";
-    }
-
-    function updateBookSummaryFromBook(book) {
-      if (!book) return;
-      const meta = [LF.formatStageLabel(book.stage), book.edition]
-        .filter(Boolean)
-        .join(" · ");
-      dom.currentBookTitle.textContent = book.title || "未命名词书";
-      dom.currentBookMeta.textContent =
-        (meta || "本地词书") + " · " + (book.units || []).length + " 个单元";
-      dom.currentBookCount.textContent = String(book.wordCount || 0) + " 词";
-      const option =
-        dom.wordbook.options[dom.wordbook.selectedIndex] ||
-        dom.wordbook.options[0];
-      if (option) {
-        option.dataset.title = book.title || option.textContent.trim();
-        option.dataset.stage = book.stage || "";
-        option.dataset.edition = book.edition || "";
-        option.dataset.unitCount = String((book.units || []).length);
-        option.dataset.wordCount = String(book.wordCount || 0);
-      }
-    }
-
-    function sampleFromBook(book, unitId) {
-      let units = book.units || [];
-      if (unitId !== "all") {
-        units = units.filter(function (unit) {
-          return unit.id === unitId;
-        });
-      }
-      for (let index = 0; index < units.length; index += 1) {
-        const unit = units[index];
-        if (Array.isArray(unit.words) && unit.words.length > 0) {
-          const word = unit.words[0];
-          return {
-            en: word.en || "",
-            zh: word.zh || "",
-            phonetic: word.phonetic || "",
-            unitTitle: unit.title || "",
-          };
+    function syncBookUi() {
+      if (!dom.bookPicker) return;
+      dom.bookPicker.querySelectorAll(".book-pick").forEach(function (bookEl) {
+        const bookCheck = bookEl.querySelector(".book-pick__check");
+        const panel = bookEl.querySelector(".book-pick__units");
+        if (bookCheck) {
+          bookEl.classList.toggle("is-selected", bookCheck.checked);
+          if (panel) panel.hidden = !bookCheck.checked;
         }
-      }
-      return null;
+        bookEl.querySelectorAll(".unit-pick").forEach(function (unitEl) {
+          const check = unitEl.querySelector(".unit-pick__check");
+          unitEl.classList.toggle("is-checked", Boolean(check && check.checked));
+        });
+      });
+      updatePickerSummary();
     }
 
-    /* --------------------------------------------------------------- preview */
-    function readInitialSample() {
-      const en = dom.previewWord ? dom.previewWord.textContent.trim() : "";
-      if (!en) return null;
-      return {
-        en: en,
-        zh: dom.previewMeaning ? dom.previewMeaning.textContent.trim() : "",
-        phonetic: dom.previewPhonetic
-          ? dom.previewPhonetic.textContent.trim()
-          : "",
-        unitTitle: dom.previewUnit
-          ? dom.previewUnit.textContent.trim()
-          : "",
-      };
+    function readSelections() {
+      const result = [];
+      if (!dom.bookPicker) return result;
+      dom.bookPicker.querySelectorAll(".book-pick").forEach(function (bookEl) {
+        const bookCheck = bookEl.querySelector(".book-pick__check");
+        if (!bookCheck || !bookCheck.checked) return;
+        const unitChecks = Array.prototype.slice.call(
+          bookEl.querySelectorAll(".unit-pick__check")
+        );
+        const checked = unitChecks.filter(function (check) {
+          return check.checked;
+        });
+        if (!checked.length) return;
+        const all = checked.length === unitChecks.length;
+        result.push({
+          wordbook_id: bookCheck.value,
+          unit_ids: all
+            ? ["all"]
+            : checked.map(function (check) {
+                return check.value;
+              }),
+        });
+      });
+      return result;
     }
 
-    function getFront() {
-      const checked = document.querySelector('input[name="front"]:checked');
-      return checked && checked.value === "zh" ? "zh" : "en";
+    function applySelections(selections) {
+      if (!dom.bookPicker) return;
+      dom.bookPicker.querySelectorAll(".book-pick").forEach(function (bookEl) {
+        const bookCheck = bookEl.querySelector(".book-pick__check");
+        const wanted = selections.find(function (selection) {
+          return selection.wordbook_id === bookCheck.value;
+        });
+        bookCheck.checked = Boolean(wanted);
+        const units = wanted ? wanted.unit_ids : [];
+        bookEl.querySelectorAll(".unit-pick__check").forEach(function (unitCheck) {
+          unitCheck.checked =
+            Boolean(wanted) &&
+            (units.indexOf("all") !== -1 || units.indexOf(unitCheck.value) !== -1);
+        });
+      });
+      syncBookUi();
+    }
+
+    function updatePickerSummary() {
+      if (!dom.pickerSummary) return;
+      const selections = readSelections();
+      let units = 0;
+      let words = 0;
+      selections.forEach(function (selection) {
+        const bookEl = dom.bookPicker.querySelector(
+          '.book-pick[data-book-id="' + CSS.escape(selection.wordbook_id) + '"]'
+        );
+        if (!bookEl) return;
+        bookEl.querySelectorAll(".unit-pick").forEach(function (unitEl) {
+          const check = unitEl.querySelector(".unit-pick__check");
+          if (check && check.checked) {
+            units += 1;
+            words += Number(unitEl.getAttribute("data-word-count")) || 0;
+          }
+        });
+      });
+      dom.pickerSummary.classList.toggle("is-empty", selections.length === 0);
+      dom.pickerSummary.textContent = selections.length
+        ? "已选 " +
+          selections.length +
+          " 本词书 · " +
+          units +
+          " 个单元 · 约 " +
+          words.toLocaleString() +
+          " 个单词"
+        : "还没有选择任何词书，请至少勾选一本。";
+      updatePreviewCaption();
+    }
+
+    /* ------------------------------------------------------------ 随机种子 */
+    function getOrder() {
+      const checked = document.querySelector('input[name="order"]:checked');
+      return checked ? checked.value : "sequence";
     }
 
     function getMode() {
       const checked = document.querySelector('input[name="mode"]:checked');
-      return checked && checked.value === "manual" ? "manual" : "auto";
+      return checked ? checked.value : "auto";
+    }
+
+    function getFront() {
+      const checked = document.querySelector('input[name="front"]:checked');
+      return checked ? checked.value : "en";
     }
 
     function getInterval() {
-      const value = Number(dom.intervalRange.value);
+      const value = Number(dom.intervalRange ? dom.intervalRange.value : 4);
       return isFinite(value) ? Math.min(30, Math.max(1, value)) : 4;
     }
 
-    function getPreviewKindOrder() {
-      return getFront() === "zh" ? ["zh", "en"] : ["en", "zh"];
-    }
-
-    function renderPreview() {
-      if (!state.sample) {
-        dom.previewWord.textContent = "—";
-        dom.previewPhonetic.textContent = "";
-        dom.previewPhonetic.hidden = true;
-        dom.previewMeaning.textContent = "暂无预览";
-        dom.previewMeaningBlock.hidden = true;
-        dom.previewWordBlock.hidden = false;
-        return;
-      }
-
-      const kinds = getPreviewKindOrder();
-      const kind = kinds[state.previewFace];
-      const word = state.sample;
-      dom.previewCard.dataset.face = kind;
-      dom.previewWordBlock.hidden = kind === "zh";
-      dom.previewMeaningBlock.hidden = kind !== "zh";
-      dom.previewFaceLabel.textContent = kind === "zh" ? "中文释义" : "ENGLISH";
-      dom.previewWatermark.textContent = kind === "zh" ? "中" : "Aa";
-      dom.previewUnit.textContent = word.unitTitle || "词书示例";
-
-      if (kind === "zh") {
-        dom.previewMeaning.textContent = word.zh || "暂无释义";
-        setPreviewSize(dom.previewMeaning, word.zh.length, 28, 80, "is-long");
-        dom.previewCard.setAttribute(
-          "aria-label",
-          "设置预览，中文释义：" + word.zh + "，按回车翻面"
-        );
-      } else {
-        dom.previewWord.textContent = word.en;
-        setPreviewWordSize(word.en.length);
-        const phonetic = (word.phonetic || "").trim();
-        dom.previewPhonetic.textContent = phonetic;
-        dom.previewPhonetic.hidden = !phonetic;
-        dom.previewCard.setAttribute(
-          "aria-label",
-          "设置预览，英文单词：" + word.en + "，按回车翻面"
-        );
+    function syncSeedUi(forceGenerate) {
+      const random = getOrder() === "random";
+      if (dom.seedField) dom.seedField.hidden = !random;
+      if (!dom.seedInput) return;
+      if (random && (forceGenerate || !LF.sanitizeSeed(dom.seedInput.value))) {
+        dom.seedInput.value = LF.generateSeed();
       }
       updatePreviewCaption();
     }
 
-    function setPreviewWordSize(length) {
-      dom.previewWord.classList.remove("is-long", "is-xlong");
-      if (length > 20) {
-        dom.previewWord.classList.add("is-xlong");
-      } else if (length > 11) {
-        dom.previewWord.classList.add("is-long");
+    /* -------------------------------------------------------------- 预览 */
+    function readInitialSample() {
+      return {
+        en: domText("previewWord"),
+        zh: domText("previewMeaning"),
+        phonetic: domText("previewPhonetic"),
+        bookTitle: "",
+        unitTitle: domText("previewUnit") || "预览",
+      };
+    }
+
+    function domText(id) {
+      const node = $(id);
+      return node ? node.textContent.trim() : "";
+    }
+
+    let previewDebounce = null;
+    function requestPreview() {
+      window.clearTimeout(previewDebounce);
+      previewDebounce = window.setTimeout(loadPreview, 280);
+    }
+
+    async function loadPreview() {
+      const selections = readSelections();
+      if (!selections.length) return;
+      const first = selections[0];
+      const bookEl = dom.bookPicker.querySelector(
+        '.book-pick[data-book-id="' + CSS.escape(first.wordbook_id) + '"]'
+      );
+      let unitId = "all";
+      if (bookEl) {
+        const checked = Array.prototype.find.call(
+          bookEl.querySelectorAll(".unit-pick__check"),
+          function (check) {
+            return check.checked;
+          }
+        );
+        if (checked) unitId = checked.value;
+      }
+      if (first.unit_ids.indexOf("all") === -1 && first.unit_ids.length) {
+        unitId = first.unit_ids[0];
+      }
+
+      const token = ++state.previewRequest;
+      try {
+        const result = await LF.api(
+          "/api/preview?book=" +
+            encodeURIComponent(first.wordbook_id) +
+            "&unit=" +
+            encodeURIComponent(unitId),
+          { timeout: 8000 }
+        );
+        if (token !== state.previewRequest || !result || !result.word) return;
+        state.sample = result.word;
+        state.previewFace = 0;
+        renderPreview();
+        updatePreviewCaption();
+        setupPreviewTimer();
+      } catch (error) {
+        /* 预览失败不影响保存 */
       }
     }
 
-    function setPreviewSize(element, length, longThreshold, xlongThreshold, longClass) {
-      element.classList.remove(longClass, "is-xlong");
-      if (length > xlongThreshold) {
-        element.classList.add("is-xlong");
-      } else if (length > longThreshold) {
-        element.classList.add(longClass);
+    function renderPreview() {
+      const sample = state.sample || {};
+      const front = getFront();
+      const kind = state.previewFace === 0 ? front : front === "en" ? "zh" : "en";
+
+      if (dom.previewCard) dom.previewCard.dataset.face = kind;
+      if (dom.previewFaceLabel) {
+        dom.previewFaceLabel.textContent = kind === "zh" ? "中文释义" : "ENGLISH";
       }
+      if (dom.previewWatermark) {
+        dom.previewWatermark.textContent = kind === "zh" ? "中" : "Aa";
+      }
+      if (dom.previewWordBlock) dom.previewWordBlock.hidden = kind === "zh";
+      if (dom.previewMeaningBlock) dom.previewMeaningBlock.hidden = kind !== "zh";
+
+      if (dom.previewWord) dom.previewWord.textContent = sample.en || "serendipity";
+      if (dom.previewPhonetic) dom.previewPhonetic.textContent = sample.phonetic || "";
+      if (dom.previewMeaning) dom.previewMeaning.textContent = sample.zh || "暂无释义";
+      if (dom.previewUnit) dom.previewUnit.textContent = sample.unitTitle || "预览";
+
+      if (dom.previewWord) {
+        const length = (sample.en || "").length;
+        dom.previewWord.classList.toggle("is-long", length > 11);
+        dom.previewWord.classList.toggle("is-xlong", length > 19);
+      }
+      if (dom.previewMeaning) {
+        const length = (sample.zh || "").length;
+        dom.previewMeaning.classList.toggle("is-long", length > 32);
+        dom.previewMeaning.classList.toggle("is-xlong", length > 80);
+      }
+      updatePreviewAudioVolume();
     }
 
     function updatePreviewCaption() {
       if (!dom.previewCaption) return;
-      const auto = getMode() === "auto";
-      const direction = getFront() === "en" ? "英文 → 中文" : "中文 → 英文";
-      if (auto) {
-        dom.previewCaption.textContent =
-          direction + " · 每 " + formatNumber(getInterval()) + " 秒自动切换";
-      } else {
-        dom.previewCaption.textContent =
-          direction + " · 手动模式，点击预览卡翻面";
-      }
+      const parts = [];
+      parts.push(getFront() === "zh" ? "先中后英" : "先英后中");
+      parts.push(getOrder() === "random" ? "随机种子" : "词书顺序");
+      parts.push(
+        getMode() === "manual"
+          ? "手动切换"
+          : formatInterval(getInterval()) + " 秒/面"
+      );
+      const selections = readSelections();
+      if (selections.length > 1) parts.push(selections.length + " 本词书");
+      dom.previewCaption.textContent = parts.join(" · ");
     }
 
     function flipPreview() {
       if (!state.sample) return;
       state.previewFace = state.previewFace === 0 ? 1 : 0;
       renderPreview();
+      setPreviewProgress(100);
+      clearPreviewTimer();
       setupPreviewTimer();
     }
 
     function setupPreviewTimer() {
       clearPreviewTimer();
-      if (!state.sample) {
-        setPreviewProgress(0);
-        return;
-      }
-      updatePreviewCaption();
-      if (state.previewHidden || getMode() !== "auto") {
-        setPreviewProgress(getMode() === "auto" ? 100 : 100);
-        return;
-      }
-      const duration = Math.max(1000, getInterval() * 1000);
+      if (state.previewHidden) return;
+      if (getMode() === "manual") return;
+      const duration = Math.max(1000, Math.round(getInterval() * 1000));
       animatePreviewProgress(duration);
       state.previewTimer = window.setTimeout(function () {
         state.previewTimer = null;
-        state.previewFace = state.previewFace === 0 ? 1 : 0;
-        renderPreview();
-        setupPreviewTimer();
+        flipPreview();
       }, duration);
     }
 
     function clearPreviewTimer() {
-      if (state.previewTimer !== null) {
+      if (state.previewTimer) {
         window.clearTimeout(state.previewTimer);
         state.previewTimer = null;
       }
@@ -728,71 +796,71 @@
     function animatePreviewProgress(duration) {
       if (!dom.previewProgress) return;
       dom.previewProgress.style.transition = "none";
-      dom.previewProgress.style.width = "100%";
+      dom.previewProgress.style.width = "0%";
       void dom.previewProgress.offsetWidth;
       dom.previewProgress.style.transition = "width " + duration + "ms linear";
-      dom.previewProgress.style.width = "0%";
+      dom.previewProgress.style.width = "100%";
     }
 
     function setPreviewProgress(percent) {
       if (!dom.previewProgress) return;
       dom.previewProgress.style.transition = "none";
-      dom.previewProgress.style.width = percent + "%";
+      dom.previewProgress.style.width = Math.max(0, Math.min(100, percent)) + "%";
     }
 
     function playPreviewAudio() {
-      if (!dom.audioToggle.checked) {
-        LF.toast("先开启单词发音，才能试听。");
-        dom.audioToggle.focus();
+      const sample = state.sample || {};
+      if (!sample.en || !dom.previewSound) return;
+      if (dom.audioToggle && !dom.audioToggle.checked) return;
+      try {
+        previewAudio.src = LF.url("/api/audio?word=" + encodeURIComponent(sample.en));
+        previewAudio.volume = Number(dom.volumeRange ? dom.volumeRange.value : 80) / 100;
+      } catch (error) {
         return;
       }
-      if (!state.sample || !state.sample.en) return;
-      const url = LF.url(
-        "/api/audio?word=" + encodeURIComponent(state.sample.en)
-      );
-      const volume = Number(dom.volumeRange.value) / 100;
-      try {
-        previewAudio.pause();
-        previewAudio.src = url;
-        previewAudio.volume = isFinite(volume) ? volume : 0.8;
-        dom.previewSound.classList.add("is-playing");
-        const promise = previewAudio.play();
-        if (promise && promise.catch) {
-          promise.catch(function () {
-            dom.previewSound.classList.remove("is-playing");
-            LF.toast("试听失败，请稍后再试。", { type: "error" });
-          });
-        }
-      } catch (error) {
-        dom.previewSound.classList.remove("is-playing");
+      dom.previewSound.classList.add("is-playing");
+      const promise = previewAudio.play();
+      if (promise && typeof promise.catch === "function") {
+        promise.catch(function () {
+          if (dom.previewSound) dom.previewSound.classList.remove("is-playing");
+          LF.toast("浏览器阻止了自动播放，请再点一次试听。", { type: "error" });
+        });
       }
     }
 
     function updatePreviewAudioVolume() {
-      const volume = Number(dom.volumeRange.value) / 100;
+      const volume = Number(dom.volumeRange ? dom.volumeRange.value : 80) / 100;
       if (isFinite(volume)) previewAudio.volume = volume;
     }
 
-    /* ---------------------------------------------------------- save & status */
+    /* ---------------------------------------------------------- 保存状态 */
     function readPayload() {
-      const front = document.querySelector('input[name="front"]:checked');
-      const order = document.querySelector('input[name="order"]:checked');
-      const mode = document.querySelector('input[name="mode"]:checked');
-      return {
-        wordbook_id: dom.wordbook.value,
-        unit_id: dom.unit.value || "all",
-        front: front ? front.value : "en",
-        order: order ? order.value : "sequence",
-        mode: mode ? mode.value : "auto",
+      const payload = {
+        selections: readSelections(),
+        front: getFront(),
+        order: getOrder(),
+        seed: dom.seedInput ? LF.sanitizeSeed(dom.seedInput.value) : "",
+        mode: getMode(),
         interval_seconds: getInterval(),
-        audio_enabled: dom.audioToggle.checked,
-        audio_volume: Number(dom.volumeRange.value) / 100,
+        audio_enabled: dom.audioToggle ? dom.audioToggle.checked : true,
+        audio_volume: Number(dom.volumeRange ? dom.volumeRange.value : 80) / 100,
       };
+      if (dom.audioPrefetchToggle) {
+        payload.audio_prefetch = dom.audioPrefetchToggle.checked;
+      }
+      return payload;
     }
 
     function queueSave(options) {
       if (!state.hasBooks) return;
       const immediate = Boolean(options && options.immediate);
+      if (!readSelections().length) {
+        setSaveStatus("error", "请至少选择一本词书");
+        if (dom.saveRetry) dom.saveRetry.hidden = true;
+        state.hasUnsaved = true;
+        state.saveFailed = true;
+        return;
+      }
       state.hasUnsaved = true;
       state.saveFailed = false;
       if (dom.saveRetry) dom.saveRetry.hidden = true;
@@ -844,7 +912,6 @@
       }
 
       state.saving = true;
-
       try {
         const result = await LF.api("/api/settings", {
           method: "PUT",
@@ -853,6 +920,9 @@
         });
         if (!result || !result.ok) {
           throw new LF.ApiError("服务器没有确认本次保存", 0, "save_unconfirmed");
+        }
+        if (result.preferences && result.preferences.seed && dom.seedInput) {
+          dom.seedInput.value = result.preferences.seed;
         }
         if (state.pendingWhileSaving) {
           setSaveStatus("saving", "正在保存更改…");
@@ -891,10 +961,10 @@
       }
       setSaveStatus("error", "保存失败，未同步");
       if (dom.saveRetry) dom.saveRetry.hidden = false;
-      LF.toast(
-        (error && error.message) || "保存失败，请检查网络后重试。",
-        { type: "error", duration: 4400 }
-      );
+      LF.toast((error && error.message) || "保存失败，请检查网络后重试。", {
+        type: "error",
+        duration: 4400,
+      });
     }
 
     function setSaveStatus(stateName, text) {
@@ -920,21 +990,24 @@
       }, 1800);
     }
 
-    /* ------------------------------------------------------------- form sync */
+    /* ------------------------------------------------------------- 表单同步 */
     function syncRangeVisuals() {
-      LF.updateRangeFill(dom.intervalRange);
-      LF.updateRangeFill(dom.volumeRange);
+      if (dom.intervalRange) LF.updateRangeFill(dom.intervalRange);
+      if (dom.volumeRange) LF.updateRangeFill(dom.volumeRange);
     }
 
     function syncIntervalUi(restartPreview) {
+      if (!dom.intervalRange) return;
       const interval = getInterval();
-      dom.intervalOutput.textContent = formatNumber(interval);
+      if (dom.intervalOutput) dom.intervalOutput.textContent = formatInterval(interval);
       LF.updateRangeFill(dom.intervalRange);
       const manual = getMode() === "manual";
-      dom.intervalField.classList.toggle("is-inactive", manual);
-      dom.intervalHint.textContent = manual
-        ? "当前为手动切换；切换到自动模式后此间隔生效。"
-        : "每一面停留 " + formatNumber(interval) + " 秒后，自动切换到下一面。";
+      if (dom.intervalField) dom.intervalField.classList.toggle("is-inactive", manual);
+      if (dom.intervalHint) {
+        dom.intervalHint.textContent = manual
+          ? "当前为手动切换；切换到自动模式后此间隔生效。"
+          : "每一面停留 " + formatInterval(interval) + " 秒后，自动切换到下一面。";
+      }
       if (restartPreview) {
         state.previewFace = 0;
         renderPreview();
@@ -944,29 +1017,34 @@
     }
 
     function syncAudioUi() {
-      const enabled = dom.audioToggle.checked;
-      dom.volumeField.classList.toggle("is-inactive", !enabled);
-      dom.previewSound.disabled = !enabled;
-      dom.previewSound.title = enabled ? "试听单词发音" : "发音已关闭";
+      const enabled = dom.audioToggle ? dom.audioToggle.checked : true;
+      if (dom.volumeField) dom.volumeField.classList.toggle("is-inactive", !enabled);
+      if (dom.previewSound) {
+        dom.previewSound.disabled = !enabled;
+        dom.previewSound.title = enabled ? "试听单词发音" : "发音已关闭";
+      }
       if (!enabled) previewAudio.pause();
     }
 
     function syncVolumeUi() {
+      if (!dom.volumeRange) return;
       const volume = Number(dom.volumeRange.value);
-      dom.volumeOutput.textContent = String(
-        isFinite(volume) ? Math.round(volume) : 80
-      );
+      if (dom.volumeOutput) {
+        dom.volumeOutput.textContent = String(
+          isFinite(volume) ? Math.round(volume) : 80
+        );
+      }
       LF.updateRangeFill(dom.volumeRange);
       updatePreviewAudioVolume();
     }
 
-    function formatNumber(value) {
+    function formatInterval(value) {
       const number = Number(value);
       if (!isFinite(number)) return "4";
       return Number.isInteger(number) ? String(number) : number.toFixed(1);
     }
 
-    /* --------------------------------------------------------------- reset/logout */
+    /* --------------------------------------------------------------- 重置/退出 */
     function openResetDialog() {
       if (!dom.resetDialog) return;
       if (dom.resetDialog.open) return;
@@ -1022,20 +1100,15 @@
         try {
           await flushSave();
         } catch (error) {
-          /* Logging out should still be possible if a save fails. */
+          /* 保存失败也应允许退出 */
         }
       }
       try {
-        await LF.api("/api/auth/logout", {
-          method: "POST",
-          timeout: 12000,
-        });
+        await LF.api("/api/auth/logout", { method: "POST", timeout: 12000 });
         window.location.href = LF.url("/settings");
       } catch (error) {
         dom.logoutBtn.disabled = false;
-        LF.toast(error.message || "退出登录失败，请稍后再试。", {
-          type: "error",
-        });
+        LF.toast(error.message || "退出登录失败，请稍后再试。", { type: "error" });
       }
     }
 

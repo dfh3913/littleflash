@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import logging
 import time
@@ -27,7 +28,16 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from . import __version__
 from .audio import AudioError, AudioStore
 from .config import AppConfig, load_config
-from .preferences import SettingsStore, SettingsValidationError, sample_word
+from .preferences import (
+    MAX_BOOKS,
+    SettingsStore,
+    SettingsValidationError,
+    iter_selected_words,
+    normalize_selections,
+    sample_word,
+    selected_word_count,
+    selection_units,
+)
 from .security import (
     LoginRateLimiter,
     csrf_equal,
@@ -223,6 +233,61 @@ def create_app(config_path: str | None = None) -> Flask:
             **extra,
         }
 
+    def make_etag(*parts: Any) -> str:
+        return hashlib.sha256(
+            "|".join(str(part) for part in parts).encode("utf-8")
+        ).hexdigest()[:32]
+
+    def etag_matches(tag: str) -> bool:
+        header = request.headers.get("If-None-Match", "")
+        return header.strip().strip('"') == tag
+
+    def parse_selection_param(raw: str | None) -> list[dict[str, Any]]:
+        """解析 ``book1~u1,u2|book2~all`` 形式的紧凑选择参数。"""
+        if not raw:
+            return []
+        items: list[dict[str, Any]] = []
+        for part in raw.split("|")[:MAX_BOOKS]:
+            book_id, _, units = part.partition("~")
+            book_id = book_id.strip()
+            if not book_id:
+                continue
+            if units.strip() in ("", "all"):
+                unit_ids = ["all"]
+            else:
+                unit_ids = [value.strip() for value in units.split(",") if value.strip()]
+            items.append({"wordbook_id": book_id, "unit_ids": unit_ids})
+        return items
+
+    def deck_items(selections: list[dict[str, Any]]) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        for book, unit, word in iter_selected_words(wordbooks, selections):
+            items.append(
+                {
+                    "en": word.en,
+                    "zh": word.zh,
+                    "phonetic": word.phonetic,
+                    "bookId": book.id,
+                    "bookTitle": book.title,
+                    "unitId": unit.id,
+                    "unitTitle": unit.title,
+                }
+            )
+        return items
+
+    def selection_query(selections: list[dict[str, Any]]) -> str:
+        parts = []
+        for selection in selections:
+            book_id = str(selection.get("wordbook_id", ""))
+            if not book_id:
+                continue
+            unit_ids = selection.get("unit_ids") or ["all"]
+            units = "all" if "all" in unit_ids else ",".join(
+                str(unit_id) for unit_id in unit_ids
+            )
+            parts.append(f"{book_id}~{units}")
+        return "|".join(parts)
+
     # ---------------------------------------------------------- page routes
     @app.get("/")
     def index() -> str:
@@ -236,15 +301,11 @@ def create_app(config_path: str | None = None) -> Flask:
         # 设置页对所有访客开放：未登录时表单读写浏览器本地存储，不会回写服务器；
         # 因此这里下发的只是与 /api/bootstrap 相同的公开默认值。
         prefs = preferences.load(wordbooks)
-
-        selected_book = wordbooks.get(str(prefs["wordbook_id"]))
-        if selected_book is None:
-            selected_book = wordbooks.first_book()
-        selected_book_meta = selected_book.metadata() if selected_book is not None else None
-        units: list[dict[str, Any]] = (
-            selected_book_meta["units"] if selected_book_meta else []
-        )
         preview = sample_word(prefs, wordbooks)
+        selection_map = {
+            selection["wordbook_id"]: selection["unit_ids"]
+            for selection in prefs["selections"]
+        }
 
         return render_template(
             "settings.html",
@@ -254,9 +315,7 @@ def create_app(config_path: str | None = None) -> Flask:
                 csrf_token=csrf_token,
                 books=books,
                 preferences=prefs,
-                selected_book=selected_book_meta,
-                selected_book_id=selected_book.id if selected_book else "",
-                units=units,
+                selection_map=selection_map,
                 preview=preview,
             ),
         )
@@ -264,12 +323,15 @@ def create_app(config_path: str | None = None) -> Flask:
     # --------------------------------------------------------------- API
     @app.get("/api/bootstrap")
     def api_bootstrap() -> Response:
+        prefs = preferences.load(wordbooks)
         return jsonify(
             ok=True,
             # 未登录的访客会用浏览器本地设置覆盖下面的公开默认值。
             authenticated=is_authenticated(),
             books=wordbooks.metadata_list(),
-            preferences=preferences.load(wordbooks),
+            preferences=prefs,
+            selectionQuery=selection_query(prefs["selections"]),
+            selectedWordCount=selected_word_count(wordbooks, prefs["selections"]),
             server={
                 "audioEnabled": config.audio.enabled,
                 "version": __version__,
@@ -285,7 +347,85 @@ def create_app(config_path: str | None = None) -> Flask:
         book = wordbooks.get(book_id)
         if book is None:
             raise ApiError("词书不存在或已被移除", 404, code="book_not_found")
-        return jsonify(ok=True, book=book.as_api())
+        tag = make_etag("book", wordbooks.revision(), book_id)
+        if etag_matches(tag):
+            response = Response(status=304)
+            response.headers["ETag"] = f'"{tag}"'
+            return response
+        response = jsonify(ok=True, book=book.as_api())
+        response.set_etag(tag)
+        response.headers["Cache-Control"] = "private, max-age=300, must-revalidate"
+        return response
+
+    @app.get("/api/deck")
+    def api_deck() -> Response:
+        """返回当前选择范围内的扁平单词列表，供首页一次加载。"""
+        prefs = preferences.load(wordbooks)
+        raw = request.args.get("s")
+        if raw:
+            selections = normalize_selections(
+                parse_selection_param(raw), wordbooks
+            )
+        else:
+            selections = prefs["selections"]
+
+        tag = make_etag("deck", wordbooks.revision(), selection_query(selections))
+        if etag_matches(tag):
+            response = Response(status=304)
+            response.headers["ETag"] = f'"{tag}"'
+            return response
+
+        items = deck_items(selections)
+        response = jsonify(
+            ok=True,
+            deck=items,
+            selections=selections,
+            query=selection_query(selections),
+            count=len(items),
+            books=[
+                {"id": book.id, "title": book.title}
+                for book in wordbooks.books()
+                if any(
+                    selection["wordbook_id"] == book.id
+                    for selection in selections
+                )
+            ],
+            audioPrefetch=bool(prefs.get("audio_prefetch")),
+        )
+        response.set_etag(tag)
+        response.headers["Cache-Control"] = "private, max-age=60, must-revalidate"
+
+        if items and prefs.get("audio_prefetch"):
+            audio.prefetch([item["en"] for item in items])
+        return response
+
+    @app.get("/api/preview")
+    def api_preview() -> Response:
+        """设置页预览：返回指定词书+单元的第一个单词。"""
+        book_id = request.args.get("book", "")
+        unit_id = request.args.get("unit", "all")
+        book = wordbooks.get(book_id) if book_id else wordbooks.first_book()
+        if book is None:
+            return jsonify(ok=True, word=None)
+
+        units = book.units
+        if unit_id != "all":
+            unit = book.get_unit(unit_id)
+            units = (unit,) if unit is not None else book.units
+        for unit in units:
+            if unit.words:
+                word = unit.words[0]
+                return jsonify(
+                    ok=True,
+                    word={
+                        "en": word.en,
+                        "zh": word.zh,
+                        "phonetic": word.phonetic,
+                        "bookTitle": book.title,
+                        "unitTitle": unit.title,
+                    },
+                )
+        return jsonify(ok=True, word=None)
 
     @app.put("/api/settings")
     @protected_write
@@ -295,6 +435,15 @@ def create_app(config_path: str | None = None) -> Flask:
             updated = preferences.update(payload, wordbooks)
         except SettingsValidationError as exc:
             raise ApiError(str(exc), 400, code="invalid_settings") from exc
+        if updated["audio_enabled"] and updated["audio_prefetch"]:
+            audio.prefetch(
+                [
+                    word.en
+                    for _, _, word in iter_selected_words(
+                        wordbooks, updated["selections"]
+                    )
+                ]
+            )
         return jsonify(ok=True, preferences=updated)
 
     @app.post("/api/settings/reset")
@@ -451,9 +600,42 @@ def create_app(config_path: str | None = None) -> Flask:
             # send_file already provided a long-lived cache policy.
             pass
         elif request.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
+            # /api/deck 与 /api/wordbooks/* 自带 ETag + 私有缓存策略，不要覆盖。
+            if "Cache-Control" not in response.headers:
+                response.headers["Cache-Control"] = "no-store"
         elif not request.path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.after_request
+    def compress_response(response: Response) -> Response:
+        """对 HTML / JSON / CSS / JS 做 gzip，显著减小首屏与 deck 传输量。"""
+        if response.direct_passthrough or response.status_code != 200:
+            return response
+        if "gzip" not in request.headers.get("Accept-Encoding", "").lower():
+            return response
+        if response.headers.get("Content-Encoding"):
+            return response
+        content_type = (response.content_type or "").split(";")[0].strip().lower()
+        if content_type not in {
+            "text/html",
+            "text/css",
+            "application/json",
+            "application/javascript",
+            "text/javascript",
+            "image/svg+xml",
+        }:
+            return response
+        data = response.get_data()
+        if len(data) < 512:
+            return response
+        compressed = gzip.compress(data, compresslevel=6)
+        if len(compressed) >= len(data):
+            return response
+        response.set_data(compressed)
+        response.headers["Content-Encoding"] = "gzip"
+        response.headers["Content-Length"] = str(len(compressed))
+        response.headers.add("Vary", "Accept-Encoding")
         return response
 
     # -------------------------------------------------------- error handlers

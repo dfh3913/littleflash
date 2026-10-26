@@ -1,0 +1,37 @@
+# 闪词 LittleFlash · 配置示例
+# 复制为 config.yml 后修改；config.yml 已被 .gitignore 排除，不会提交。
+# 设置页密码也可用环境变量 LITTLEFLASH_SETTINGS_PASSWORD 覆盖。
+
+app:
+  host: "127.0.0.1"        # 只监听本机；由 nginx 反代对外提供服务
+  port: 4570
+  debug: false
+  session_hours: 2         # 设置页登录有效期（小时）
+  # secret_key: "..."      # 可选；留空会自动生成 data/.secret_key
+
+wordbooks:
+  directory: "src/wordbooks"
+  auto_reload: true
+  max_file_size_kb: 4096
+  max_books: 100
+
+settings:
+  password: "change-me"    # 首次部署前务必修改
+  # password_hash: "scrypt:32768:8:1$..."
+  state_file: "data/preferences.json"
+
+audio:
+  enabled: true
+  type: 2                  # 有道发音类型：1 美音，2 英音
+  timeout_seconds: 8
+  max_bytes: 3145728
+  cache_dir: ".cache/audio"
+  cache_ttl_hours: 720
+  prefetch: true           # 后台预缓存发音；设置页可由管理员临时关闭
+
+security:
+  trust_proxy_headers: true
+  cookie_secure: false     # HTTPS 站点请改为 true
+  login_max_attempts: 5
+  login_window_seconds: 600
+  login_lockout_seconds: 900

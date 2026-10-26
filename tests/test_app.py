@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import gzip
 import json
+import os
 import re
+import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -38,7 +42,7 @@ def test_bootstrap_and_wordbook_are_public_and_complete(client) -> None:
 
     book = client.get("/api/wordbooks/alpha").get_json()
     assert book["book"]["title"] == "Alpha Book"
-    assert book["book"]["wordCount"] == 2
+    assert book["book"]["wordCount"] == 3
     assert book["book"]["units"][0]["words"][0]["en"] == "apple"
 
     assert client.get("/api/wordbooks/missing").status_code == 404
@@ -175,7 +179,8 @@ def test_settings_write_requires_auth_csrf_and_valid_json(client) -> None:
     state_path = client.application.extensions["littleflash"].config.preferences_path
     stored = json.loads(state_path.read_text(encoding="utf-8"))
     assert stored["wordbook_id"] == "beta"
-    assert state_path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert state_path.stat().st_mode & 0o777 == 0o600
 
     invalid = client.put(
         "/api/settings",
@@ -365,3 +370,168 @@ def test_error_page_and_api_not_found(client) -> None:
     assert api.status_code == 404
     assert api.is_json
     assert api.get_json()["code"] == "not_found"
+
+
+# --------------------------------------------------------- 0.1.3 新功能
+def test_multi_book_selection_and_deck(client) -> None:
+    headers = login(client)
+
+    updated = client.put(
+        "/api/settings",
+        json={
+            "selections": [
+                {"wordbook_id": "alpha", "unit_ids": ["u1"]},
+                {"wordbook_id": "beta", "unit_ids": ["all"]},
+            ]
+        },
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.get_data(as_text=True)
+    prefs = updated.get_json()["preferences"]
+    assert len(prefs["selections"]) == 2
+    assert prefs["wordbook_id"] == "alpha"
+    assert prefs["unit_id"] == "u1"
+
+    deck = client.get("/api/deck").get_json()
+    assert deck["count"] == 4
+    assert [item["en"] for item in deck["deck"]] == [
+        "apple",
+        "banana",
+        "date",
+        "elderberry",
+    ]
+    assert deck["deck"][0]["bookTitle"] == "Alpha Book"
+    assert deck["deck"][-1]["unitTitle"] == "Unit 1 · Greetings"
+
+    custom = client.get("/api/deck?s=alpha~u2|beta~u1").get_json()
+    assert custom["count"] == 3
+    assert [item["en"] for item in custom["deck"]] == ["cherry", "date", "elderberry"]
+    assert custom["query"] == "alpha~u2|beta~u1"
+
+    invalid = client.put(
+        "/api/settings",
+        json={"selections": [{"wordbook_id": "missing", "unit_ids": ["all"]}]},
+        headers=headers,
+    )
+    assert invalid.status_code == 400
+    assert invalid.get_json()["code"] == "invalid_settings"
+
+
+def test_seed_and_random_order(client) -> None:
+    headers = login(client)
+
+    updated = client.put(
+        "/api/settings",
+        json={"order": "random", "seed": "中文Seed-123"},
+        headers=headers,
+    ).get_json()["preferences"]
+    assert updated["order"] == "random"
+    assert updated["seed"] == "中文Seed-123"
+
+    # 旧值 shuffle 自动迁移为 random
+    legacy = client.put(
+        "/api/settings", json={"order": "shuffle"}, headers=headers
+    ).get_json()["preferences"]
+    assert legacy["order"] == "random"
+
+    # 空种子会自动生成一个
+    regenerated = client.put(
+        "/api/settings", json={"seed": "   "}, headers=headers
+    ).get_json()["preferences"]
+    assert regenerated["seed"]
+    assert regenerated["seed"] != "中文Seed-123"
+
+    long_seed = "字" * 100
+    truncated = client.put(
+        "/api/settings", json={"seed": long_seed}, headers=headers
+    ).get_json()["preferences"]
+    assert len(truncated["seed"]) == 64
+
+    stored = client.get("/api/settings").get_json()["preferences"]
+    assert stored["seed"] == truncated["seed"]
+
+
+def test_preview_deck_etag_and_gzip(client) -> None:
+    preview = client.get("/api/preview?book=alpha&unit=u2").get_json()
+    assert preview["word"]["en"] == "cherry"
+    assert preview["word"]["bookTitle"] == "Alpha Book"
+
+    first = client.get("/api/deck?s=alpha~all")
+    assert first.status_code == 200
+    tag = first.headers["ETag"]
+    assert "private" in first.headers["Cache-Control"]
+
+    cached = client.get("/api/deck?s=alpha~all", headers={"If-None-Match": tag})
+    assert cached.status_code == 304
+    assert cached.get_data() == b""
+
+    compressed = client.get(
+        "/api/deck?s=alpha~all", headers={"Accept-Encoding": "gzip"}
+    )
+    assert compressed.headers["Content-Encoding"] == "gzip"
+    assert "Accept-Encoding" in compressed.headers.get("Vary", "")
+    payload = json.loads(gzip.decompress(compressed.get_data()).decode("utf-8"))
+    assert payload["count"] == 3
+
+
+def test_audio_prefetch_and_toggle(client, services, monkeypatch, tmp_path) -> None:
+    headers = login(client)
+
+    page = client.get("/settings").get_data(as_text=True)
+    assert 'id="audioPrefetchToggle"' in page
+    assert 'id="bookPicker"' in page
+    assert 'id="seedInput"' in page
+
+    disabled = client.put(
+        "/api/settings", json={"audio_prefetch": False}, headers=headers
+    )
+    assert disabled.status_code == 200
+    assert disabled.get_json()["preferences"]["audio_prefetch"] is False
+
+    invalid = client.put(
+        "/api/settings", json={"audio_prefetch": "yes"}, headers=headers
+    )
+    assert invalid.status_code == 400
+
+    from littleflash.audio import AudioStore
+
+    cache_dir = tmp_path / "prefetch-cache"
+    config = replace(
+        services.config.audio,
+        enabled=True,
+        prefetch=True,
+        cache_dir=cache_dir,
+        cache_ttl_seconds=3600,
+    )
+    store = AudioStore(config, services.wordbooks)
+    downloaded: list[str] = []
+
+    def fake_download(self, word, destination):
+        downloaded.append(word)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"ID3" + b"\x00" * 128)
+
+    monkeypatch.setattr(type(store), "_download", fake_download)
+    queued = store.prefetch(["apple", "banana", "not-a-word"], limit=10)
+    assert queued == 2
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if store._prefetch_thread is None or not store._prefetch_thread.is_alive():
+            break
+        time.sleep(0.05)
+    assert sorted(downloaded) == ["apple", "banana"]
+    assert len(list(cache_dir.glob("*.mp3"))) == 2
+    assert store.prefetch(["apple"]) == 0
+
+
+def test_wordbooks_have_no_missing_translations() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "wordbooks"
+    missing = []
+    for path in root.glob("*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for unit in data.get("units", []):
+            for word in unit.get("words", []):
+                if word.get("zh") in {"无", "", "—", "-", "暂无"}:
+                    missing.append(word.get("en"))
+    assert missing == []

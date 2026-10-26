@@ -9,7 +9,8 @@
   <meta name="app-base" content="{{ request.script_root }}">
   <title>{% block title %}闪词 · LittleFlash{% endblock %}</title>
   {% block meta %}{% endblock %}
-  <link rel="icon" href="{{ url_for('static', filename='favicon.svg', v=asset_version) }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.png', v=asset_version) }}" type="image/png">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png', v=asset_version) }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css', v=asset_version) }}">
   {% block styles %}{% endblock %}
 </head>

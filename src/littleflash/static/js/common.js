@@ -22,6 +22,156 @@
      未登录时设置页把偏好写进 localStorage：只影响当前浏览器，
      不会同步给其他访问者，也不会写进服务器配置。 */
   const LOCAL_PREFS_KEY = "littleflash.preferences.v1";
+  const SEED_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const MAX_SEED_LENGTH = 64;
+
+  function sanitizeSeed(value, fallback) {
+    if (typeof value !== "string") return fallback === undefined ? "" : fallback;
+    const text = value
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .trim()
+      .slice(0, MAX_SEED_LENGTH);
+    if (text) return text;
+    return fallback === undefined ? "" : fallback;
+  }
+
+  function generateSeed(length) {
+    const size = Math.max(4, Math.min(MAX_SEED_LENGTH, length || 8));
+    const buffer = new Uint32Array(size);
+    if (window.crypto && window.crypto.getRandomValues) {
+      window.crypto.getRandomValues(buffer);
+    } else {
+      for (let i = 0; i < size; i += 1) {
+        buffer[i] = Math.floor(Math.random() * 0xffffffff);
+      }
+    }
+    let result = "";
+    for (let i = 0; i < size; i += 1) {
+      result += SEED_ALPHABET.charAt(buffer[i] % SEED_ALPHABET.length);
+    }
+    return result;
+  }
+
+  function sanitizeSelections(value) {
+    if (!Array.isArray(value)) return null;
+    const result = [];
+    const seen = new Set();
+    value.forEach(function (item) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return;
+      const bookId = item.wordbook_id;
+      if (typeof bookId !== "string" || !bookId || seen.has(bookId)) return;
+      let units = [];
+      if (Array.isArray(item.unit_ids)) {
+        units = item.unit_ids
+          .filter(function (unitId) {
+            return typeof unitId === "string" && unitId.length > 0;
+          })
+          .slice(0, 200);
+      }
+      if (!units.length) units = ["all"];
+      seen.add(bookId);
+      result.push({ wordbook_id: bookId, unit_ids: units });
+    });
+    return result.length ? result.slice(0, 50) : null;
+  }
+
+  function normalizeSelections(prefs, books) {
+    const list = Array.isArray(books) ? books : [];
+    const byId = new Map();
+    list.forEach(function (book) {
+      if (book && typeof book.id === "string") byId.set(book.id, book);
+    });
+    const source =
+      prefs && typeof prefs === "object" && Array.isArray(prefs.selections)
+        ? prefs.selections
+        : prefs && typeof prefs === "object" && prefs.wordbook_id
+        ? [
+            {
+              wordbook_id: prefs.wordbook_id,
+              unit_ids: prefs.unit_id && prefs.unit_id !== "all" ? [prefs.unit_id] : ["all"],
+            },
+          ]
+        : [];
+
+    const result = [];
+    const seen = new Set();
+    source.forEach(function (item) {
+      if (!item || typeof item !== "object") return;
+      const book = byId.get(item.wordbook_id);
+      if (!book || seen.has(book.id)) return;
+      const knownUnits = new Set(
+        (book.units || []).map(function (unit) {
+          return unit.id;
+        })
+      );
+      let unitIds = [];
+      if (Array.isArray(item.unit_ids) && item.unit_ids.indexOf("all") === -1) {
+        unitIds = item.unit_ids.filter(function (unitId) {
+          return knownUnits.has(unitId);
+        });
+      }
+      if (!unitIds.length) unitIds = ["all"];
+      seen.add(book.id);
+      result.push({ wordbook_id: book.id, unit_ids: unitIds });
+    });
+
+    if (!result.length && list.length) {
+      result.push({ wordbook_id: list[0].id, unit_ids: ["all"] });
+    }
+    return result;
+  }
+
+  function selectionQuery(selections) {
+    return (Array.isArray(selections) ? selections : [])
+      .map(function (selection) {
+        const units =
+          selection.unit_ids.indexOf("all") !== -1
+            ? "all"
+            : selection.unit_ids.join(",");
+        return selection.wordbook_id + "~" + units;
+      })
+      .join("|");
+  }
+
+  function hashSeed(value) {
+    const text = String(value == null ? "" : value);
+    let h = 1779033703 ^ text.length;
+    for (let i = 0; i < text.length; i += 1) {
+      h = Math.imul(h ^ text.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return function () {
+      h = Math.imul(h ^ (h >>> 16), 2246822507);
+      h = Math.imul(h ^ (h >>> 13), 3266489909);
+      h ^= h >>> 16;
+      return h >>> 0;
+    };
+  }
+
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function seededRandom(seed) {
+    return mulberry32(hashSeed(seed)());
+  }
+
+  function shuffleWithSeed(array, seed) {
+    const random = seededRandom(seed);
+    for (let i = array.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(random() * (i + 1));
+      const value = array[i];
+      array[i] = array[j];
+      array[j] = value;
+    }
+    return array;
+  }
 
   function sanitizePreferences(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -34,12 +184,20 @@
     if (typeof value.unit_id === "string" && value.unit_id) {
       clean.unit_id = value.unit_id;
     }
+    const selections = sanitizeSelections(value.selections);
+    if (selections) clean.selections = selections;
     if (value.front === "en" || value.front === "zh") {
       clean.front = value.front;
     }
-    if (value.order === "sequence" || value.order === "shuffle") {
-      clean.order = value.order;
+    if (
+      value.order === "sequence" ||
+      value.order === "random" ||
+      value.order === "shuffle"
+    ) {
+      clean.order = value.order === "shuffle" ? "random" : value.order;
     }
+    const seed = sanitizeSeed(value.seed);
+    if (seed) clean.seed = seed;
     if (value.mode === "auto" || value.mode === "manual") {
       clean.mode = value.mode;
     }
@@ -52,6 +210,9 @@
     }
     if (typeof value.audio_enabled === "boolean") {
       clean.audio_enabled = value.audio_enabled;
+    }
+    if (typeof value.audio_prefetch === "boolean") {
+      clean.audio_prefetch = value.audio_prefetch;
     }
     const volume = Number(value.audio_volume);
     if (isFinite(volume)) {
@@ -311,6 +472,13 @@
     padNumber: padNumber,
     setHidden: setHidden,
     formatStageLabel: formatStageLabel,
+    generateSeed: generateSeed,
+    sanitizeSeed: sanitizeSeed,
+    normalizeSelections: normalizeSelections,
+    sanitizeSelections: sanitizeSelections,
+    selectionQuery: selectionQuery,
+    shuffleWithSeed: shuffleWithSeed,
+    seededRandom: seededRandom,
     csrfToken: csrfToken,
   };
 })();
