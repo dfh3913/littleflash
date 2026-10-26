@@ -1,10 +1,28 @@
 /* 单文件版端到端检查（file:// 直接打开） */
 const { spawn } = require("child_process");
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
-const FILE = process.env.LF_FILE || path.resolve(__dirname, "../dist/littleflash-0.1.3-standalone.html");
+
+/* 默认取 dist 下版本号最大的单文件产物，避免每次发版都改脚本 */
+function resolveFile() {
+  if (process.env.LF_FILE) return process.env.LF_FILE;
+  const dir = path.resolve(__dirname, "../dist");
+  const found = fs.existsSync(dir)
+    ? fs
+        .readdirSync(dir)
+        .filter((name) => /^littleflash-.*-standalone\.html$/.test(name))
+        .sort()
+    : [];
+  if (!found.length) {
+    throw new Error("dist 里没有单文件产物，请先运行 scripts/build_standalone.py");
+  }
+  return path.join(dir, found[found.length - 1]);
+}
+
+const FILE = resolveFile();
 const PORT = Number(process.env.LF_CDP_PORT || 9336);
 const profile = path.join(os.tmpdir(), "lf-standalone-" + Date.now());
 const fileUrl = "file:///" + FILE.replace(/\\/g, "/");
@@ -147,6 +165,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await evaluate("document.getElementById('settingsPanel').hidden === false")
   );
   check(
+    "打开设置后闪词暂停",
+    (await evaluate("document.getElementById('playLabel').textContent")) === "继续" &&
+      (await evaluate("document.getElementById('playerHint').textContent")).indexOf("暂停") !== -1,
+    await evaluate("document.getElementById('playerHint').textContent")
+  );
+  check(
     "词书选择器已渲染",
     await evaluate("document.querySelectorAll('#standaloneBooks .standalone-book').length > 0"),
     String(await evaluate("document.querySelectorAll('#standaloneBooks .standalone-book').length"))
@@ -166,20 +190,38 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     )
   );
 
-  // 选中第二本词书，deck 应该变大
+  // 勾选第二本词书：单元默认全不选，再点一个单元才生效
   await evaluate(
     "var heads=document.querySelectorAll('#standaloneBooks .standalone-book__head input'); if(heads.length>1){heads[1].checked=true;heads[1].dispatchEvent(new Event('change',{bubbles:true}));} true"
   );
-  await sleep(500);
+  await sleep(400);
+  const autoUnits = await evaluate(
+    "document.querySelectorAll('#standaloneBooks .standalone-book')[1].querySelectorAll('.standalone-unit input:checked').length"
+  );
+  check("勾选词书后单元默认全不选", autoUnits === 0, "自动勾选单元数 " + autoUnits);
+  check(
+    "摘要提示还要点选单元",
+    (await evaluate("document.getElementById('settingsSummary').textContent")).indexOf("还没选单元") !== -1,
+    await evaluate("document.getElementById('settingsSummary').textContent")
+  );
+  await evaluate(
+    "var u=document.querySelectorAll('#standaloneBooks .standalone-book')[1].querySelector('.standalone-unit input');u.checked=true;u.dispatchEvent(new Event('change',{bubbles:true}));true"
+  );
+  await sleep(400);
   const secondCount = await evaluate("document.getElementById('bookCount').textContent");
   check("多选词书后单词数增加", secondCount !== firstCount, firstCount + " → " + secondCount);
 
   // 关闭面板后仍可继续学习
   await evaluate("document.getElementById('closeSettings').click();true");
-  await sleep(200);
+  await sleep(300);
   check(
     "设置面板可关闭",
     await evaluate("document.getElementById('settingsPanel').hidden === true")
+  );
+  check(
+    "关闭设置后自动恢复播放",
+    (await evaluate("document.getElementById('playLabel').textContent")) === "暂停",
+    await evaluate("document.getElementById('playerHint').textContent")
   );
 
   check("页面无 JS 报错", errors.length === 0, errors.slice(0, 2).join(" | "));

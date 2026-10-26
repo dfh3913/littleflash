@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """构建无后端单文件 HTML。
 
-产物：dist/littleflash-0.1.3-standalone.html
+产物：dist/littleflash-<版本号>-standalone.html
 - 词书压缩成紧凑数组（en/zh/phonetic）；
 - 内联 base.css + home.css + standalone.css（去掉外部字体，减少请求）；
 - 首屏 HTML 在前、数据块在后，先把界面画出来再解析大 JSON；
@@ -14,13 +14,22 @@ import base64
 import gzip
 import json
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "src" / "littleflash" / "static"
 STANDALONE = ROOT / "standalone"
 DIST = ROOT / "dist"
-VERSION = "0.1.3"
+
+
+def project_version() -> str:
+    """版本号只从 pyproject.toml 读，避免和包版本走偏。"""
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        return tomllib.load(handle)["project"]["version"]
+
+
+VERSION = project_version()
 
 
 def load_data() -> dict:

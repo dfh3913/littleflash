@@ -1443,13 +1443,35 @@
   font-size: 7px;
   font-weight: 650;
   letter-spacing: 0.06em;
+  transition: color 220ms ease, border-color 220ms ease;
 }
 
-.live-badge span {
+.live-badge__dot {
   width: 4px;
   height: 4px;
   border-radius: 50%;
+  background: rgba(255, 253, 247, 0.34);
+  transition: background 220ms ease, box-shadow 220ms ease;
+}
+
+.live-badge__text {
+  white-space: nowrap;
+}
+
+.live-badge[data-state="playing"] {
+  color: rgba(255, 253, 247, 0.88);
+  border-color: rgba(220, 233, 144, 0.32);
+}
+
+.live-badge[data-state="playing"] .live-badge__dot {
   background: var(--lime);
+  animation: preview-live-pulse 2.4s ease-out infinite;
+}
+
+@keyframes preview-live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(220, 233, 144, 0.42); }
+  70% { box-shadow: 0 0 0 5px rgba(220, 233, 144, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(220, 233, 144, 0); }
 }
 
 .preview-flashcard {
@@ -1663,6 +1685,88 @@
   border-radius: inherit;
   background: var(--lime);
   transition: width 500ms var(--ease-out);
+}
+
+/* ---------------------------------------------- preview playback controls */
+.preview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 13px;
+}
+
+.preview-control {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 253, 247, 0.16);
+  border-radius: 50%;
+  color: rgba(255, 253, 247, 0.72);
+  background: rgba(255, 253, 247, 0.05);
+  cursor: pointer;
+  transition:
+    color 200ms ease,
+    border-color 200ms ease,
+    background 200ms ease,
+    transform 200ms var(--ease-out);
+}
+
+.preview-control:hover {
+  color: var(--cream);
+  border-color: rgba(220, 233, 144, 0.44);
+  background: rgba(220, 233, 144, 0.13);
+}
+
+.preview-control:active {
+  transform: scale(0.93);
+}
+
+.preview-control:disabled,
+.preview-control:disabled:hover {
+  color: rgba(255, 253, 247, 0.28);
+  border-color: rgba(255, 253, 247, 0.1);
+  background: rgba(255, 253, 247, 0.03);
+  cursor: default;
+  transform: none;
+}
+
+.preview-control:focus-visible {
+  outline: 2px solid rgba(220, 233, 144, 0.68);
+  outline-offset: 2px;
+}
+
+.preview-control .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.preview-control--play {
+  width: 34px;
+  height: 34px;
+  color: #16302a;
+  border-color: transparent;
+  background: var(--lime);
+  box-shadow: 0 6px 14px -8px rgba(220, 233, 144, 0.8);
+}
+
+.preview-control--play:hover {
+  color: #102820;
+  border-color: transparent;
+  background: var(--lime);
+  transform: translateY(-1px);
+}
+
+.preview-control--play .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.preview-control--play[aria-pressed="true"] .icon {
+  width: 14px;
+  height: 14px;
 }
 
 .preview-caption {
@@ -2086,6 +2190,12 @@
 .book-pick.is-selected {
   border-color: rgba(29, 107, 92, 0.35);
   background: rgba(220, 233, 144, 0.12);
+}
+
+/* 勾选了词书但还没点任何单元：提示继续选择 */
+.book-pick.is-empty {
+  border-color: rgba(230, 91, 53, 0.36);
+  background: rgba(230, 91, 53, 0.05);
 }
 
 .book-pick__head {

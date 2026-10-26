@@ -7,6 +7,9 @@
     return document.getElementById(id);
   };
 
+  // 预览窗一次拉取多少张卡，供上一张/下一张切换。
+  const PREVIEW_SAMPLE_SIZE = 24;
+
   initLogin();
   initSettings();
 
@@ -182,9 +185,15 @@
       previewMeaning: $("previewMeaning"),
       previewWatermark: $("previewWatermark"),
       previewUnit: $("previewUnit"),
+      previewIndex: $("previewIndex"),
       previewCaption: $("previewCaption"),
       previewProgress: $("previewProgress"),
       previewSound: $("previewSound"),
+      previewPrev: $("previewPrev"),
+      previewPlay: $("previewPlay"),
+      previewNext: $("previewNext"),
+      previewBadge: $("previewBadge"),
+      previewBadgeText: $("previewBadgeText"),
     };
 
     const modeMeta = document.querySelector('meta[name="settings-mode"]');
@@ -200,8 +209,10 @@
       saveTimer: null,
       redirectTimer: null,
       previewRequest: 0,
-      sample: readInitialSample(),
+      samples: [readInitialSample()],
+      sampleIndex: 0,
       previewFace: 0,
+      previewPlaying: false,
       previewTimer: null,
       previewHidden: document.hidden,
       resetBusy: false,
@@ -231,6 +242,7 @@
       syncSeedUi();
       renderPreview();
       setupPreviewTimer();
+      syncPreviewControls();
       updatePreviewCaption();
       setSaveStatus("saved", savedLabel());
       if (dom.seedInput && !LF.sanitizeSeed(dom.seedInput.value) && getOrder() === "random") {
@@ -238,6 +250,8 @@
         syncSeedUi();
         queueSave();
       }
+      // 首屏先取一小批单词，预览窗才有多张可以切换。
+      if (readSelections().length) loadPreview();
     }
 
     function savedLabel() {
@@ -314,12 +328,19 @@
           if (!(target instanceof HTMLInputElement)) return;
           if (target.classList.contains("book-pick__check")) {
             const bookEl = target.closest(".book-pick");
-            bookEl.querySelectorAll(".unit-pick__check").forEach(function (unitCheck) {
-              unitCheck.checked = target.checked;
-            });
+            // 勾选词书只展开单元列表，默认不预选任何单元；取消勾选才清空本书单元。
+            if (!target.checked) {
+              bookEl.querySelectorAll(".unit-pick__check").forEach(function (unitCheck) {
+                unitCheck.checked = false;
+              });
+            }
             syncBookUi();
-            queueSave();
             requestPreview();
+            queueSave();
+            if (target.checked && !bookEl.querySelector(".unit-pick__check:checked")) {
+              const firstUnit = bookEl.querySelector(".unit-pick__check");
+              if (firstUnit) firstUnit.focus({ preventScroll: true });
+            }
           } else if (target.classList.contains("unit-pick__check")) {
             const bookEl = target.closest(".book-pick");
             const bookCheck = bookEl.querySelector(".book-pick__check");
@@ -448,8 +469,30 @@
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             flipPreview();
+          } else if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            stepSample(-1, false);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            stepSample(1, false);
           }
         });
+      }
+
+      if (dom.previewPrev) {
+        dom.previewPrev.addEventListener("click", function () {
+          stepSample(-1, false);
+        });
+      }
+
+      if (dom.previewNext) {
+        dom.previewNext.addEventListener("click", function () {
+          stepSample(1, false);
+        });
+      }
+
+      if (dom.previewPlay) {
+        dom.previewPlay.addEventListener("click", togglePreviewPlay);
       }
 
       if (dom.previewSound) {
@@ -536,8 +579,11 @@
       dom.bookPicker.querySelectorAll(".book-pick").forEach(function (bookEl) {
         const bookCheck = bookEl.querySelector(".book-pick__check");
         const panel = bookEl.querySelector(".book-pick__units");
+        const checkedUnits = bookEl.querySelectorAll(".unit-pick__check:checked").length;
         if (bookCheck) {
           bookEl.classList.toggle("is-selected", bookCheck.checked);
+          // 已勾选词书但还没点任何单元：提示用户继续选单元。
+          bookEl.classList.toggle("is-empty", bookCheck.checked && checkedUnits === 0);
           if (panel) panel.hidden = !bookCheck.checked;
         }
         bookEl.querySelectorAll(".unit-pick").forEach(function (unitEl) {
@@ -610,17 +656,37 @@
           }
         });
       });
+      const pendingBooks = dom.bookPicker.querySelectorAll(".book-pick.is-empty").length;
       dom.pickerSummary.classList.toggle("is-empty", selections.length === 0);
-      dom.pickerSummary.textContent = selections.length
-        ? "已选 " +
+      if (selections.length) {
+        let text =
+          "已选 " +
           selections.length +
           " 本词书 · " +
           units +
           " 个单元 · 约 " +
           words.toLocaleString() +
-          " 个单词"
-        : "还没有选择任何词书，请至少勾选一本。";
+          " 个单词";
+        // 还有勾了却没选单元的词书：已经选中的照常保存，这里只做提醒。
+        if (pendingBooks) {
+          text += "（另有 " + pendingBooks + " 本还没选单元）";
+        }
+        dom.pickerSummary.textContent = text;
+      } else if (pendingBooks) {
+        dom.pickerSummary.textContent =
+          "已勾选 " + pendingBooks + " 本词书，还需要在展开的列表里点选至少一个单元。";
+      } else {
+        dom.pickerSummary.textContent = "还没有选择任何词书，请至少勾选一本。";
+      }
       updatePreviewCaption();
+    }
+
+    /* 未就绪时的提示语：区分「没勾词书」和「勾了词书但没选单元」。 */
+    function selectionHint() {
+      if (!dom.bookPicker) return "";
+      if (readSelections().length) return "";
+      if (dom.bookPicker.querySelector(".book-pick.is-empty")) return "请至少勾选一个单元";
+      return "请至少选择一本词书";
     }
 
     /* ------------------------------------------------------------ 随机种子 */
@@ -703,22 +769,38 @@
           "/api/preview?book=" +
             encodeURIComponent(first.wordbook_id) +
             "&unit=" +
-            encodeURIComponent(unitId),
+            encodeURIComponent(unitId) +
+            "&limit=" +
+            PREVIEW_SAMPLE_SIZE,
           { timeout: 8000 }
         );
-        if (token !== state.previewRequest || !result || !result.word) return;
-        state.sample = result.word;
+        if (token !== state.previewRequest || !result) return;
+        const words = Array.isArray(result.words) && result.words.length
+          ? result.words
+          : result.word
+            ? [result.word]
+            : [];
+        if (!words.length) return;
+        state.samples = words;
+        state.sampleIndex = 0;
         state.previewFace = 0;
         renderPreview();
         updatePreviewCaption();
+        syncPreviewControls();
         setupPreviewTimer();
       } catch (error) {
         /* 预览失败不影响保存 */
       }
     }
 
+    function currentSample() {
+      if (!state.samples.length) return {};
+      const index = Math.min(Math.max(state.sampleIndex, 0), state.samples.length - 1);
+      return state.samples[index] || {};
+    }
+
     function renderPreview() {
-      const sample = state.sample || {};
+      const sample = currentSample();
       const front = getFront();
       const kind = state.previewFace === 0 ? front : front === "en" ? "zh" : "en";
 
@@ -736,6 +818,12 @@
       if (dom.previewPhonetic) dom.previewPhonetic.textContent = sample.phonetic || "";
       if (dom.previewMeaning) dom.previewMeaning.textContent = sample.zh || "暂无释义";
       if (dom.previewUnit) dom.previewUnit.textContent = sample.unitTitle || "预览";
+      if (dom.previewIndex) {
+        const total = state.samples.length;
+        const position = pad2(state.sampleIndex + 1);
+        dom.previewIndex.textContent =
+          total > 1 ? position + " / " + pad2(total) : position;
+      }
 
       if (dom.previewWord) {
         const length = (sample.en || "").length;
@@ -750,6 +838,10 @@
       updatePreviewAudioVolume();
     }
 
+    function pad2(number) {
+      return String(number).padStart(2, "0");
+    }
+
     function updatePreviewCaption() {
       if (!dom.previewCaption) return;
       const parts = [];
@@ -762,27 +854,94 @@
       );
       const selections = readSelections();
       if (selections.length > 1) parts.push(selections.length + " 本词书");
+      parts.push(state.previewPlaying ? "演示中" : "已暂停");
       dom.previewCaption.textContent = parts.join(" · ");
     }
 
+    /* 点卡片：先翻面，已在释义面则切到下一张。 */
     function flipPreview() {
-      if (!state.sample) return;
-      state.previewFace = state.previewFace === 0 ? 1 : 0;
+      if (!state.samples.length) return;
+      if (state.previewFace === 0) {
+        state.previewFace = 1;
+        renderPreview();
+      } else {
+        stepSample(1, false);
+        return;
+      }
+      if (state.previewPlaying) {
+        setupPreviewTimer();
+      } else {
+        setPreviewProgress(0);
+      }
+    }
+
+    /* 切换上一张 / 下一张卡片；autoplay 为 false 时手动切换不朗读。 */
+    function stepSample(delta, autoplay) {
+      if (!state.samples.length) return;
+      const total = state.samples.length;
+      state.sampleIndex = (state.sampleIndex + delta + total) % total;
+      state.previewFace = 0;
       renderPreview();
-      setPreviewProgress(100);
-      clearPreviewTimer();
-      setupPreviewTimer();
+      if (state.previewPlaying) setupPreviewTimer();
+      else setPreviewProgress(0);
+      if (autoplay) playPreviewAudio();
+    }
+
+    function togglePreviewPlay() {
+      state.previewPlaying = !state.previewPlaying;
+      syncPreviewControls();
+      updatePreviewCaption();
+      if (state.previewPlaying) {
+        setupPreviewTimer();
+        playPreviewAudio();
+      } else {
+        clearPreviewTimer();
+        setPreviewProgress(0);
+        previewAudio.pause();
+        if (dom.previewSound) dom.previewSound.classList.remove("is-playing");
+      }
+    }
+
+    function syncPreviewControls() {
+      const playing = state.previewPlaying;
+      if (dom.previewPlay) {
+        dom.previewPlay.setAttribute("aria-pressed", playing ? "true" : "false");
+        dom.previewPlay.setAttribute("aria-label", playing ? "暂停预览" : "播放预览");
+        dom.previewPlay.title = playing ? "暂停预览" : "播放预览";
+        LF.setHidden(dom.previewPlay.querySelector(".preview-control__icon-play"), playing);
+        LF.setHidden(dom.previewPlay.querySelector(".preview-control__icon-pause"), !playing);
+      }
+      if (dom.previewBadge) {
+        dom.previewBadge.dataset.state = playing ? "playing" : "paused";
+      }
+      if (dom.previewBadgeText) {
+        dom.previewBadgeText.textContent = playing ? "演示中" : "已暂停";
+      }
+      const single = state.samples.length < 2;
+      if (dom.previewPrev) dom.previewPrev.disabled = single;
+      if (dom.previewNext) dom.previewNext.disabled = single;
     }
 
     function setupPreviewTimer() {
       clearPreviewTimer();
+      // 预览默认暂停：只有点了播放才开始自动切换。
+      if (!state.previewPlaying) {
+        setPreviewProgress(0);
+        return;
+      }
       if (state.previewHidden) return;
-      if (getMode() === "manual") return;
       const duration = Math.max(1000, Math.round(getInterval() * 1000));
       animatePreviewProgress(duration);
       state.previewTimer = window.setTimeout(function () {
         state.previewTimer = null;
-        flipPreview();
+        if (state.previewFace === 0) {
+          state.previewFace = 1;
+          renderPreview();
+          playPreviewAudio();
+          setupPreviewTimer();
+        } else {
+          stepSample(1, true);
+        }
       }, duration);
     }
 
@@ -809,7 +968,7 @@
     }
 
     function playPreviewAudio() {
-      const sample = state.sample || {};
+      const sample = currentSample();
       if (!sample.en || !dom.previewSound) return;
       if (dom.audioToggle && !dom.audioToggle.checked) return;
       try {
@@ -854,8 +1013,9 @@
     function queueSave(options) {
       if (!state.hasBooks) return;
       const immediate = Boolean(options && options.immediate);
-      if (!readSelections().length) {
-        setSaveStatus("error", "请至少选择一本词书");
+      const hint = selectionHint();
+      if (hint) {
+        setSaveStatus("error", hint);
         if (dom.saveRetry) dom.saveRetry.hidden = true;
         state.hasUnsaved = true;
         state.saveFailed = true;
@@ -975,11 +1135,11 @@
       const labels = {
         saved: "所有更改已保存",
         saving: "正在保存更改…",
-        error: "保存失败",
+        error: "请完成选择",
       };
       dom.saveStatus.setAttribute(
         "aria-label",
-        labels[stateName] || text || "保存状态"
+        text || labels[stateName] || "保存状态"
       );
     }
 

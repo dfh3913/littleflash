@@ -474,6 +474,44 @@ def test_preview_deck_etag_and_gzip(client) -> None:
     assert payload["count"] == 3
 
 
+def test_preview_returns_batch_for_card_switch(client) -> None:
+    batch = client.get("/api/preview?book=alpha&unit=all").get_json()
+    assert [item["en"] for item in batch["words"]] == ["apple", "banana", "cherry"]
+    # 兼容旧调用：word 仍然是第一张卡
+    assert batch["word"] == batch["words"][0]
+
+    limited = client.get("/api/preview?book=alpha&unit=all&limit=2").get_json()
+    assert [item["en"] for item in limited["words"]] == ["apple", "banana"]
+
+    clamped = client.get("/api/preview?book=alpha&unit=all&limit=999").get_json()
+    assert len(clamped["words"]) == 3
+
+    malformed = client.get("/api/preview?book=alpha&unit=all&limit=abc").get_json()
+    assert len(malformed["words"]) == 3
+
+    missing = client.get("/api/preview?book=missing").get_json()
+    assert missing["word"] is None
+    assert missing["words"] == []
+
+
+def test_settings_preview_starts_paused_with_controls(client) -> None:
+    page = client.get("/settings").get_data(as_text=True)
+    for control in ("previewPrev", "previewPlay", "previewNext"):
+        assert f'id="{control}"' in page
+    assert 'id="previewBadge"' in page
+    assert 'data-state="paused"' in page
+    assert "已暂停" in page
+    assert 'id="previewIndex"' in page
+    # 播放按钮初始是未播放状态，暂停图标默认隐藏
+    assert 'aria-pressed="false"' in page
+    assert re.search(
+        r'class="icon preview-control__icon-pause"[^>]*\shidden[\s>]', page
+    )
+    assert not re.search(
+        r'class="icon preview-control__icon-play"[^>]*\shidden[\s>]', page
+    )
+
+
 def test_audio_prefetch_and_toggle(client, services, monkeypatch, tmp_path) -> None:
     headers = login(client)
 

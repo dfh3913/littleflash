@@ -49,6 +49,7 @@
     interval: 4,
     kindOrder: ["en", "zh"],
     autoRunning: true,
+    settingsOpen: false,
     timer: null,
     ready: false,
     audioWord: "",
@@ -342,12 +343,18 @@
   }
 
   function updatePlayer() {
-    const playing = state.mode === "auto" && state.autoRunning;
+    const playing =
+      state.mode === "auto" && state.autoRunning && !state.settingsOpen;
     $("playLabel").textContent = playing ? "暂停" : "继续";
     $("iconPause").hidden = !playing;
     $("iconPlay").hidden = playing;
-    $("playerHint").textContent =
-      state.mode === "manual" ? "手动模式 · 空格翻面" : playing ? "正在按节奏切换" : "已暂停";
+    $("playerHint").textContent = state.settingsOpen
+      ? "设置中 · 闪词已暂停"
+      : state.mode === "manual"
+        ? "手动模式 · 空格翻面"
+        : playing
+          ? "正在按节奏切换"
+          : "已暂停";
     $("liveDot").classList.toggle("is-paused", !playing);
   }
 
@@ -366,6 +373,7 @@
   function schedule() {
     clearTimer();
     if (!state.ready || state.mode !== "auto" || !state.autoRunning) return;
+    if (state.settingsOpen) return;
     state.timer = window.setTimeout(function () {
       state.timer = null;
       if (state.face === 0) {
@@ -476,7 +484,12 @@
 
   /* ------------------------------------------------------------ 设置面板 */
   function openSettings() {
+    // 打开设置即暂停闪词，避免卡片在面板后面自己翻动。
+    state.settingsOpen = true;
+    clearTimer();
+    audio.pause();
     renderSettings();
+    updatePlayer();
     $("settingsPanel").hidden = false;
     document.body.style.overflow = "hidden";
   }
@@ -484,6 +497,9 @@
   function closeSettings() {
     $("settingsPanel").hidden = true;
     document.body.style.overflow = "";
+    state.settingsOpen = false;
+    updatePlayer();
+    schedule();
   }
 
   function renderSettings() {
@@ -570,6 +586,17 @@
     return result;
   }
 
+  /* 已勾选但还没点选任何单元的词书数量 */
+  function pendingBookCount() {
+    let count = 0;
+    document.querySelectorAll("#standaloneBooks .standalone-book").forEach(function (bookEl) {
+      const head = bookEl.querySelector(".standalone-book__head input");
+      if (!head || !head.checked) return;
+      if (!bookEl.querySelector(".standalone-unit input:checked")) count += 1;
+    });
+    return count;
+  }
+
   function updateSettingsSummary() {
     const selections = readSelectionsFromPanel();
     let units = 0;
@@ -589,15 +616,24 @@
         }
       });
     });
-    $("settingsSummary").textContent = selections.length
-      ? "已选 " + selections.length + " 本词书 · " + units + " 个单元 · " + words + " 个单词"
-      : "至少选择一本词书";
+    const pending = pendingBookCount();
+    if (selections.length) {
+      let text =
+        "已选 " + selections.length + " 本词书 · " + units + " 个单元 · " + words + " 个单词";
+      // 勾了却没选单元的词书：已选中的照常生效，这里只做提醒。
+      if (pending) text += "（另有 " + pending + " 本还没选单元）";
+      $("settingsSummary").textContent = text;
+    } else {
+      $("settingsSummary").textContent = pending
+        ? "已勾选 " + pending + " 本词书，还需要点选至少一个单元"
+        : "至少选择一本词书";
+    }
   }
 
   function commitSettings(rebuild) {
     const selections = readSelectionsFromPanel();
     if (!selections.length) {
-      toast("至少选择一本词书");
+      toast(pendingBookCount() ? "请至少点选一个单元" : "至少选择一本词书");
       updateSettingsSummary();
       return;
     }
@@ -681,9 +717,14 @@
       const bookEl = target.closest(".standalone-book");
       if (!bookEl) return;
       if (target.closest(".standalone-book__head")) {
-        bookEl.querySelectorAll(".standalone-unit input").forEach(function (input) {
-          input.checked = target.checked;
-        });
+        // 勾选词书只展开单元列表，默认不预选任何单元；取消勾选才清空本书。
+        if (!target.checked) {
+          bookEl.querySelectorAll(".standalone-unit").forEach(function (unitEl) {
+            const input = unitEl.querySelector("input");
+            if (input) input.checked = false;
+            unitEl.classList.remove("is-checked");
+          });
+        }
         bookEl.querySelector(".standalone-book__units").hidden = !target.checked;
       } else {
         const unitEl = target.closest(".standalone-unit");

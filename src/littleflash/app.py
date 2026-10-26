@@ -49,6 +49,9 @@ from .wordbooks import WordbookManager
 
 logger = logging.getLogger(__name__)
 
+# 设置页预览一次最多下发多少张卡（够上/下切换，又不至于把整本书塞进响应）。
+PREVIEW_LIMIT_MAX = 60
+
 
 class ApiError(Exception):
     def __init__(
@@ -401,31 +404,46 @@ def create_app(config_path: str | None = None) -> Flask:
 
     @app.get("/api/preview")
     def api_preview() -> Response:
-        """设置页预览：返回指定词书+单元的第一个单词。"""
+        """设置页预览：返回指定词书+单元的一小批单词。
+
+        返回 ``word``（第一个，兼容旧调用）与 ``words``（最多 limit 条），
+        设置页用 ``words`` 支持预览窗的上一张/下一张切换。
+        """
         book_id = request.args.get("book", "")
         unit_id = request.args.get("unit", "all")
+        try:
+            limit = int(request.args.get("limit", "24"))
+        except (TypeError, ValueError):
+            limit = 24
+        limit = max(1, min(PREVIEW_LIMIT_MAX, limit))
+
         book = wordbooks.get(book_id) if book_id else wordbooks.first_book()
         if book is None:
-            return jsonify(ok=True, word=None)
+            return jsonify(ok=True, word=None, words=[])
 
         units = book.units
         if unit_id != "all":
             unit = book.get_unit(unit_id)
             units = (unit,) if unit is not None else book.units
+
+        words: list[dict[str, str]] = []
         for unit in units:
-            if unit.words:
-                word = unit.words[0]
-                return jsonify(
-                    ok=True,
-                    word={
+            for word in unit.words:
+                words.append(
+                    {
                         "en": word.en,
                         "zh": word.zh,
                         "phonetic": word.phonetic,
                         "bookTitle": book.title,
                         "unitTitle": unit.title,
-                    },
+                    }
                 )
-        return jsonify(ok=True, word=None)
+                if len(words) >= limit:
+                    break
+            if len(words) >= limit:
+                break
+
+        return jsonify(ok=True, word=words[0] if words else None, words=words)
 
     @app.put("/api/settings")
     @protected_write

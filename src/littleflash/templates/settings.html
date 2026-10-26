@@ -303,7 +303,10 @@
       <section class="preview-panel">
         <div class="preview-panel__head">
           <span class="insight-kicker">Live preview</span>
-          <span class="live-badge"><span aria-hidden="true"></span>实时</span>
+          <span class="live-badge" id="previewBadge" data-state="paused">
+            <span class="live-badge__dot" aria-hidden="true"></span>
+            <span class="live-badge__text" id="previewBadgeText">已暂停</span>
+          </span>
         </div>
         <div class="preview-flashcard" id="previewCard" tabindex="0" aria-label="设置预览卡，按回车翻面" data-face="{{ preferences.front if preferences else 'en' }}">
           <div class="preview-flashcard__head">
@@ -323,9 +326,22 @@
           </div>
           <div class="preview-flashcard__foot">
             <span id="previewUnit">{{ preview.unitTitle if preview else '预览' }}</span>
-            <span class="preview-index">01</span>
+            <span class="preview-index" id="previewIndex">01</span>
           </div>
           <span class="preview-watermark" id="previewWatermark" aria-hidden="true">Aa</span>
+        </div>
+        <div class="preview-controls" role="group" aria-label="预览播放控制">
+          <button class="preview-control" id="previewPrev" type="button" aria-label="上一张卡片" title="上一张（←）">
+            <svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
+          </button>
+          <button class="preview-control preview-control--play" id="previewPlay" type="button"
+                  aria-label="播放预览" aria-pressed="false" title="播放预览">
+            <svg class="icon preview-control__icon-play" aria-hidden="true"><use href="#icon-play"></use></svg>
+            <svg class="icon preview-control__icon-pause" aria-hidden="true" hidden><use href="#icon-pause"></use></svg>
+          </button>
+          <button class="preview-control" id="previewNext" type="button" aria-label="下一张卡片" title="下一张（→）">
+            <svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
+          </button>
         </div>
         <p class="preview-caption" id="previewCaption">正在读取你的学习节奏…</p>
         <div class="preview-progress" aria-hidden="true"><span id="previewProgress"></span></div>
