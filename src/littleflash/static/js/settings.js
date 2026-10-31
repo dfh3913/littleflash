@@ -1150,7 +1150,9 @@
       if (dom.previewWord) dom.previewWord.textContent = sample.en || "serendipity";
       if (dom.previewPhonetic) dom.previewPhonetic.textContent = sample.phonetic || "";
       if (dom.previewMeaning) dom.previewMeaning.textContent = sample.zh || "暂无释义";
-      if (dom.previewUnit) dom.previewUnit.textContent = sample.unitTitle || "预览";
+      if (dom.previewUnit) {
+        dom.previewUnit.textContent = LF.plainUnitTitle(sample.unitTitle) || "预览";
+      }
       if (dom.previewIndex) {
         const total = state.samples.length;
         const position = pad2(state.sampleIndex + 1);
@@ -1205,7 +1207,9 @@
         dom.previewMeaning.classList.toggle("is-long", extra.length > 32);
         dom.previewMeaning.classList.toggle("is-xlong", extra.length > 80);
       }
-      if (dom.previewUnit) dom.previewUnit.textContent = sample.unitTitle || "预览";
+      if (dom.previewUnit) {
+        dom.previewUnit.textContent = LF.plainUnitTitle(sample.unitTitle) || "预览";
+      }
       if (dom.previewIndex) {
         const total = state.samples.length;
         const position = pad2(state.sampleIndex + 1);

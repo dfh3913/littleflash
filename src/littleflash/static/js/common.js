@@ -566,6 +566,13 @@
     return STAGE_LABELS[key] || String(stage);
   }
 
+  /* 学习页/预览只显示「变法」本身；常规/非常规 只在设置页用来区分选项。 */
+  function plainUnitTitle(title) {
+    return String(title == null ? "" : title)
+      .replace(/\s*·\s*(常规|非常规|特例)\s*$/, "")
+      .trim();
+  }
+
   /* 卡片书（Anki 牌组）的正/背面：第一行按「词条 + 两个空格 + 词性释义」拆开，
      其余行作为补充说明，前端据此做大小字号混排。 */
   function splitCardLine(text) {
@@ -612,6 +619,7 @@
     shuffleWithSeed: shuffleWithSeed,
     seededRandom: seededRandom,
     splitCardLine: splitCardLine,
+    plainUnitTitle: plainUnitTitle,
     csrfToken: csrfToken,
   };
 })();

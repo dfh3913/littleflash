@@ -299,6 +299,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const frontWord = await evaluate("document.getElementById('cardLinesWord').textContent");
   check("卡片正面显示原词", frontWord === "finance", frontWord);
   check(
+    "学习页不显示常规/非常规后缀",
+    (await evaluate("document.getElementById('unitLabel').textContent")).indexOf("常规") === -1,
+    await evaluate("document.getElementById('unitLabel').textContent")
+  );
+  check(
     "正面标注 PROMPT",
     (await evaluate("document.getElementById('faceLabelText').textContent")).indexOf("正面") !== -1
   );

@@ -385,6 +385,13 @@
     };
   }
 
+  /* 学习页只显示「变法」本身，常规/非常规 留给设置页区分选项。 */
+  function plainUnitTitle(title) {
+    return String(title == null ? "" : title)
+      .replace(/\s*·\s*(常规|非常规|特例)\s*$/, "")
+      .trim();
+  }
+
   function isCardWord(word) {
     return Boolean(word && word.kind === "cards" && word.front && word.back);
   }
@@ -416,7 +423,7 @@
     if (!word) return;
     if (isCardWord(word)) {
       renderCardFace(word);
-      $("unitLabel").textContent = word.unitTitle;
+      $("unitLabel").textContent = plainUnitTitle(word.unitTitle);
       $("unitLabel").title = [word.bookTitle, word.unitTitle].filter(Boolean).join(" · ");
       if (animate && !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {
         $("cardContent").classList.remove("is-updating");
@@ -446,7 +453,7 @@
       $("phoneticText").hidden = !word.phonetic;
       $("cardTipText").textContent = state.face === 0 ? "点击翻面" : "下一个";
     }
-    $("unitLabel").textContent = word.unitTitle;
+    $("unitLabel").textContent = plainUnitTitle(word.unitTitle);
     $("unitLabel").title = [word.bookTitle, word.unitTitle].filter(Boolean).join(" · ");
 
     if (animate && !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {

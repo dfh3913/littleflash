@@ -368,7 +368,7 @@
       }
     }
 
-    dom.unitLabel.textContent = word.unitTitle;
+    dom.unitLabel.textContent = LF.plainUnitTitle(word.unitTitle);
     dom.unitLabel.title = [word.bookTitle, word.unitTitle]
       .filter(Boolean)
       .join(" · ");
