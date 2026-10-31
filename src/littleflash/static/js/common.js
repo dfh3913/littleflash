@@ -566,6 +566,12 @@
     return STAGE_LABELS[key] || String(stage);
   }
 
+  /* 设置页的分组标题：Anki 牌组叫「名词空」，前端统一显示成「名词变形」。 */
+  function plainGroupTitle(title) {
+    const text = String(title == null ? "" : title).trim();
+    return text.endsWith("空") ? text.slice(0, -1) + "变形" : text;
+  }
+
   /* 学习页/预览只显示「变法」本身；常规/非常规 只在设置页用来区分选项。 */
   function plainUnitTitle(title) {
     return String(title == null ? "" : title)
@@ -620,6 +626,7 @@
     seededRandom: seededRandom,
     splitCardLine: splitCardLine,
     plainUnitTitle: plainUnitTitle,
+    plainGroupTitle: plainGroupTitle,
     csrfToken: csrfToken,
   };
 })();

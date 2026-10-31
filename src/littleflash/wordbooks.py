@@ -690,6 +690,21 @@ def _deck_units(cards: list[Word]) -> tuple[Unit, ...]:
             key = (root, label, type_label)
         ordered.setdefault(key, []).extend(group_cards)
 
+    # 同名条目（常规 / 非常规）必须挨在一起，顺序固定为 常规 → 非常规。
+    positions: dict[tuple[str, str], int] = {}
+    for root, label, _type_label in ordered:
+        positions.setdefault((root, label), len(positions))
+    type_rank = {"": 0, "常规": 0, "非常规": 1}
+    ordered = dict(
+        sorted(
+            ordered.items(),
+            key=lambda item: (
+                positions[(item[0][0], item[0][1])],
+                type_rank.get(item[0][2], 2),
+            ),
+        )
+    )
+
     units: list[Unit] = []
     for index, ((root, label, type_label), group_cards) in enumerate(
         list(ordered.items())[:MAX_UNITS_PER_BOOK], start=1

@@ -99,6 +99,18 @@ def test_real_word_formation_grouping_rules() -> None:
     assert "名词变副词" in units
     assert "名词变副词 · 常规" not in units
 
+    # 同名两条（常规 + 非常规）必须挨在一起，且顺序固定。
+    titles = [unit.title for unit in book.units]
+    assert titles[:4] == [
+        "名词变形容词 · 常规",
+        "名词变形容词 · 非常规",
+        "名词变复数 · 常规",
+        "名词变复数 · 非常规",
+    ]
+    for index, title in enumerate(titles):
+        if title.endswith(" · 常规"):
+            assert titles[index + 1] == title.replace(" · 常规", " · 非常规")
+
 
 def test_real_cards_carry_front_back_and_answer() -> None:
     manager = WordbookManager(REPO / "src" / "wordbooks")

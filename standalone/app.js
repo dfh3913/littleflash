@@ -385,6 +385,12 @@
     };
   }
 
+  /* Anki 牌组叫「名词空」，单文件版也统一显示成「名词变形」。 */
+  function plainGroupTitle(title) {
+    const text = String(title == null ? "" : title).trim();
+    return text.endsWith("空") ? text.slice(0, -1) + "变形" : text;
+  }
+
   /* 学习页只显示「变法」本身，常规/非常规 留给设置页区分选项。 */
   function plainUnitTitle(title) {
     return String(title == null ? "" : title)
@@ -724,12 +730,17 @@
       units.className = "standalone-book__units";
       units.hidden = !selection;
       let lastGroup = "";
+      const labelCounts = {};
+      book.units.forEach(function (unit) {
+        const key = unit.label || unit.title;
+        labelCounts[key] = (labelCounts[key] || 0) + 1;
+      });
       book.units.forEach(function (unit) {
         if (book.kind === "cards" && unit.group && unit.group !== lastGroup) {
           lastGroup = unit.group;
           const header = document.createElement("div");
           header.className = "standalone-unit-group";
-          header.textContent = unit.group;
+          header.textContent = plainGroupTitle(unit.group);
           units.appendChild(header);
         }
         const label = document.createElement("label");
@@ -744,9 +755,11 @@
             selection.unit_ids.indexOf(unit.id) !== -1);
         if (unitCheck.checked) label.classList.add("is-checked");
         const text = document.createElement("span");
+        const unitLabel = unit.label || unit.title;
         text.textContent =
           book.kind === "cards"
-            ? (unit.label || unit.title) + (unit.type ? " · " + unit.type : "")
+            ? unitLabel +
+              (unit.type && (labelCounts[unitLabel] || 0) > 1 ? " · " + unit.type : "")
             : unit.title;
         label.appendChild(unitCheck);
         label.appendChild(text);

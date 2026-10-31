@@ -862,8 +862,21 @@
           groups.get(key).push(unit);
         });
 
+        /* 只有同名条目出现两次（常规 + 非常规）时才需要标注，
+           同组唯一的一条直接光名显示。 */
+        function labelCountsOf(items) {
+          const counts = {};
+          items.forEach(function (unit) {
+            const key = unit.label || unit.title || "";
+            counts[key] = (counts[key] || 0) + 1;
+          });
+          return counts;
+        }
+
         container.textContent = "";
-        groups.forEach(function (items, title) {
+        groups.forEach(function (items, rawTitle) {
+          const title = LF.plainGroupTitle(rawTitle);
+          const labelCounts = labelCountsOf(items);
           const section = document.createElement("section");
           section.className = "formation-group";
           const anyChosen = items.some(function (unit) {
@@ -911,36 +924,60 @@
 
           const list = document.createElement("div");
           list.className = "formation-group__units";
+
+          /* 同名条目（常规 / 非常规）放进同一个格子，保证它们在位置上紧挨着；
+             只有一个的变法单独一格，不标注类型。 */
+          const byLabel = new Map();
           items.forEach(function (unit) {
-            const row = document.createElement("label");
-            row.className = "unit-pick formation-unit";
-            row.setAttribute("data-word-count", unit.wordCount);
-
-            const input = document.createElement("input");
-            input.type = "checkbox";
-            input.className = "unit-pick__check";
-            input.value = unit.id;
-            input.setAttribute("data-book", bookId);
-            input.checked = chosen.has(unit.id);
-
-            const label = document.createElement("span");
-            label.className = "formation-unit__label";
-            label.textContent =
-              unit.label && unit.label !== title ? unit.label : "全部";
-
-            row.append(input, label);
-            if (unit.type) {
-              const badge = document.createElement("span");
-              badge.className = "formation-unit__type";
-              badge.dataset.type = unit.type === "常规" ? "regular" : "special";
-              badge.textContent = unit.type;
-              row.append(badge);
-            }
-            const small = document.createElement("small");
-            small.textContent = (Number(unit.wordCount) || 0) + " 词";
-            row.append(small);
-            list.append(row);
+            const key = unit.label || unit.title || "";
+            if (!byLabel.has(key)) byLabel.set(key, []);
+            byLabel.get(key).push(unit);
           });
+
+          byLabel.forEach(function (groupItems, labelText) {
+            const pair = groupItems.length > 1;
+            const ordered = groupItems.slice().sort(function (a, b) {
+              const rank = function (item) {
+                return item.type === "非常规" ? 1 : 0;
+              };
+              return rank(a) - rank(b);
+            });
+            const cell = document.createElement("div");
+            cell.className = "formation-cell" + (pair ? " is-pair" : "");
+
+            ordered.forEach(function (unit) {
+              const row = document.createElement("label");
+              row.className = "unit-pick formation-unit";
+              row.setAttribute("data-word-count", unit.wordCount);
+
+              const input = document.createElement("input");
+              input.type = "checkbox";
+              input.className = "unit-pick__check";
+              input.value = unit.id;
+              input.setAttribute("data-book", bookId);
+              input.checked = chosen.has(unit.id);
+
+              const label = document.createElement("span");
+              label.className = "formation-unit__label";
+              label.textContent =
+                labelText && labelText !== title ? labelText : "全部";
+
+              row.append(input, label);
+              if (pair && unit.type) {
+                const badge = document.createElement("span");
+                badge.className = "formation-unit__type";
+                badge.dataset.type = unit.type === "常规" ? "regular" : "special";
+                badge.textContent = unit.type;
+                row.append(badge);
+              }
+              const small = document.createElement("small");
+              small.textContent = (Number(unit.wordCount) || 0) + " 词";
+              row.append(small);
+              cell.append(row);
+            });
+            list.append(cell);
+          });
+
           section.append(list);
           container.append(section);
         });

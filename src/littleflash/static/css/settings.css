@@ -2736,8 +2736,31 @@
 .formation-group__units {
   display: none;
   grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  align-items: start;
   gap: 5px;
   padding: 8px 10px 10px 12px;
+}
+
+/* 同名两条（常规 / 非常规）放在同一格，视觉上始终挨着 */
+.formation-cell {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.formation-cell.is-pair {
+  padding: 3px;
+  border: 1px solid rgba(23, 51, 44, 0.09);
+  border-radius: 11px;
+  background: rgba(255, 253, 247, 0.92);
+}
+
+.formation-cell.is-pair .formation-unit {
+  background: rgba(255, 254, 250, 0.8);
+}
+
+.formation-cell.is-pair .formation-unit__label {
+  font-weight: 600;
 }
 
 .formation-group.is-open .formation-group__units {

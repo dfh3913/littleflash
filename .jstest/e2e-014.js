@@ -207,10 +207,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     (await evaluate("document.querySelectorAll('.book-pick--formation .formation-group').length")) === 4
   );
   check(
-    "分组标题包含四个大类",
+    "分组标题用「xx变形」且包含四个大类",
     (await evaluate(
       "Array.from(document.querySelectorAll('.formation-group__title')).map(n=>n.textContent).join(',')"
-    )) === "名词空,形容词空,代词,动词空",
+    )) === "名词变形,形容词变形,代词,动词变形",
     await evaluate(
       "Array.from(document.querySelectorAll('.formation-group__title')).map(n=>n.textContent).join(',')"
     )
@@ -220,6 +220,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     (await evaluate(
       "Array.from(document.querySelectorAll('.book-pick--formation .formation-unit')).filter(n=>n.textContent.indexOf('形容词变副词')===0).length"
     )) === 2
+  );
+  check(
+    "同名两条放在同一格，常规在上、非常规在下",
+    await evaluate(
+      "(function(){var c=Array.from(document.querySelectorAll('.formation-cell.is-pair')).find(function(x){return x.textContent.indexOf('形容词变副词')!==-1});if(!c)return false;var rows=c.querySelectorAll('.formation-unit');return rows.length===2 && rows[0].textContent.indexOf('常规')!==-1 && rows[1].textContent.indexOf('非常规')!==-1})()"
+    )
+  );
+  check(
+    "只有一个变法的方向不带常规/非常规标注",
+    await evaluate(
+      "(function(){var cells=Array.from(document.querySelectorAll('.formation-cell'));var c=cells.find(function(x){return !x.classList.contains('is-pair') && x.textContent.indexOf('名词变副词')!==-1});return !!c && !c.querySelector('.formation-unit__type')})()"
+    )
   );
   check(
     "代词只剩一组",
@@ -255,25 +267,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   );
   await sleep(200);
 
-  /* 勾选「名词空」整组 */
+  /* 勾选「名词变形」整组 */
   await evaluate(
     "var b=document.querySelector('.book-pick--formation .book-pick__check');b.checked=true;b.dispatchEvent(new Event('change',{bubbles:true}));true"
   );
   await sleep(400);
   await evaluate(
-    "var g=Array.from(document.querySelectorAll('.formation-group')).find(x=>x.textContent.indexOf('名词空')!==-1);var c=g.querySelector('.formation-group__check');c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));true"
+    "var g=Array.from(document.querySelectorAll('.formation-group')).find(x=>x.textContent.indexOf('名词变形')!==-1);var c=g.querySelector('.formation-group__check');c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));true"
   );
   check(
     "组头全选会勾上整组单元",
     await waitFor(
-      "Array.from(document.querySelectorAll('.formation-group')).find(x=>x.textContent.indexOf('名词空')!==-1).querySelectorAll('.unit-pick__check:checked').length === 9",
+      "Array.from(document.querySelectorAll('.formation-group')).find(x=>x.textContent.indexOf('名词变形')!==-1).querySelectorAll('.unit-pick__check:checked').length === 9",
       6000
     )
   );
   check(
     "组头显示为已选",
     await evaluate(
-      "Array.from(document.querySelectorAll('.formation-group')).find(x=>x.textContent.indexOf('名词空')!==-1).querySelector('.formation-group__check').checked"
+      "Array.from(document.querySelectorAll('.formation-group')).find(x=>x.textContent.indexOf('名词变形')!==-1).querySelector('.formation-group__check').checked"
     )
   );
   check(
