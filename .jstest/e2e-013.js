@@ -91,6 +91,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await send("Page.enable", {}, sessionId);
   await send("Runtime.enable", {}, sessionId);
   await send("Log.enable", {}, sessionId);
+  // 0.1.4 起首次访问会弹向导：老用例先标记为已完成。
+  await send(
+    "Page.addScriptToEvaluateOnNewDocument",
+    { source: "try{localStorage.setItem('littleflash.wizard.v1','done')}catch(e){}" },
+    sessionId
+  );
 
   async function goto(url) {
     const loaded = new Promise((resolve) => {
@@ -156,7 +162,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   check(
     "设置页显示多词书选择器",
-    (await evaluate("document.querySelectorAll('#bookPicker .book-pick').length")) === 7
+    (await evaluate("document.querySelectorAll('#bookPicker .book-pick').length")) === 8
   );
   check(
     "管理员可见音频预缓存开关",

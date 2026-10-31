@@ -246,3 +246,43 @@
     padding: 14px 15px 24px;
   }
 }
+
+/* 卡片书分组标题（单文件版设置抽屉） */
+.standalone-book__units {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.standalone-unit-group {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.standalone-unit-group:first-child {
+  margin-top: 0;
+}
+
+.standalone-intro {
+  margin-bottom: 14px;
+  padding: 14px 15px;
+  border: 1px solid rgba(29, 107, 92, 0.22);
+  border-radius: 14px;
+  background: rgba(220, 233, 144, 0.24);
+}
+
+.standalone-intro strong {
+  display: block;
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.standalone-intro ol {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+  color: var(--muted-strong);
+  font-size: 10px;
+  line-height: 1.8;
+}

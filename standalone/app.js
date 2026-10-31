@@ -18,19 +18,34 @@
   }
 
   const STORE_KEY = "littleflash.standalone.v1";
+  const PROGRESS_KEY = "littleflash.progress.v1";
+  const WIZARD_KEY = "littleflash.wizard.v1";
   const SEED_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const BOOKS = (RAW.books || []).map(function (book) {
     return {
       id: book.i,
       title: book.t,
+      kind: book.k === "cards" ? "cards" : "words",
       stage: book.s || "",
       edition: book.e || "",
       units: (book.u || []).map(function (unit) {
         return {
           id: unit.i,
           title: unit.t,
+          group: unit.g || "",
+          label: unit.l || unit.t,
+          type: unit.y || "",
           words: (unit.w || []).map(function (word) {
-            return { en: word[0], zh: word[1] || "", phonetic: word[2] || "" };
+            return {
+              en: word[0],
+              zh: word[1] || "",
+              phonetic: word[2] || "",
+              front: word[3] || "",
+              back: word[4] || "",
+              note: word[5] || "",
+              answer: word[6] || "",
+              kind: word[3] ? "cards" : "word",
+            };
           }),
         };
       }),
@@ -48,6 +63,7 @@
     seed: "",
     interval: 4,
     kindOrder: ["en", "zh"],
+    fontScale: 1,
     autoRunning: true,
     settingsOpen: false,
     timer: null,
@@ -95,6 +111,7 @@
       interval_seconds: 4,
       audio_enabled: true,
       audio_volume: 0.8,
+      font_scale: 1,
     };
   }
 
@@ -151,6 +168,7 @@
       interval_seconds: clampNumber(stored.interval_seconds, 1, 30, 4),
       audio_enabled: stored.audio_enabled !== false,
       audio_volume: clampNumber(stored.audio_volume, 0, 1, 0.8),
+      font_scale: clampNumber(stored.font_scale, 0.8, 1.8, 1),
     };
   }
 
@@ -211,7 +229,9 @@
     state.seed = sanitizeSeed(prefs.seed, generateSeed());
     state.interval = clampNumber(prefs.interval_seconds, 1, 30, 4);
     state.kindOrder = prefs.front === "zh" ? ["zh", "en"] : ["en", "zh"];
+    state.fontScale = clampNumber(prefs.font_scale, 0.8, 1.8, 1);
     state.autoRunning = prefs.mode === "auto";
+    document.documentElement.style.setProperty("--lf-scale", String(state.fontScale));
   }
 
   function buildDeck() {
@@ -236,6 +256,11 @@
             en: word.en,
             zh: word.zh,
             phonetic: word.phonetic,
+            kind: word.kind,
+            front: word.front,
+            back: word.back,
+            note: word.note,
+            answer: word.answer,
             bookTitle: book.title,
             unitTitle: unit.title,
           });
@@ -250,7 +275,57 @@
     if (state.ready && state.order === "random") {
       seededShuffle(state.deck, roundSeed(1));
     }
+    const resumed = restoreProgress();
     renderAll();
+    if (resumed > 0) toast("已从第 " + (resumed + 1) + " 个单词继续");
+  }
+
+  /* ------------------------------------------------------ 本机学习进度 */
+  function selectionKey() {
+    const parts = (state.prefs.selections || []).map(function (selection) {
+      return selection.wordbook_id + "~" + selection.unit_ids.join(",");
+    });
+    return parts.join("|") + "|" + state.order + "|" +
+      (state.order === "random" ? state.seed : "-");
+  }
+
+  function readProgressMap() {
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(PROGRESS_KEY) || "{}");
+      return raw && typeof raw === "object" ? raw : {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  function restoreProgress() {
+    const entry = readProgressMap()[selectionKey()];
+    if (!entry) return 0;
+    const index = Math.floor(Number(entry.i));
+    if (!isFinite(index) || index <= 0 || index >= state.deck.length) return 0;
+    state.index = index;
+    state.round = Math.max(1, Math.floor(Number(entry.r)) || 1);
+    return index;
+  }
+
+  function saveProgress() {
+    if (!state.ready || !state.deck.length) return;
+    const all = readProgressMap();
+    all[selectionKey()] = { i: state.index, r: state.round, t: Date.now() };
+    const trimmed = {};
+    Object.keys(all)
+      .sort(function (a, b) {
+        return (Number(all[b] && all[b].t) || 0) - (Number(all[a] && all[a].t) || 0);
+      })
+      .slice(0, 24)
+      .forEach(function (key) {
+        trimmed[key] = all[key];
+      });
+    try {
+      window.localStorage.setItem(PROGRESS_KEY, JSON.stringify(trimmed));
+    } catch (error) {
+      /* 隐私模式下忽略 */
+    }
   }
 
   function currentWord() {
@@ -292,13 +367,70 @@
     $("bookCount").textContent = state.deck.length + " 个单词";
   }
 
+  function splitCardLine(text) {
+    const lines = String(text == null ? "" : text)
+      .split("\n")
+      .map(function (line) {
+        return line.replace(/\s+$/, "");
+      })
+      .filter(function (line) {
+        return line.length > 0;
+      });
+    const first = lines.shift() || "";
+    const match = first.match(/^(.{1,86}?)\s{2,}(.+)$/);
+    return {
+      word: match ? match[1] : first,
+      pos: match ? match[2] : "",
+      extra: lines.join("\n"),
+    };
+  }
+
+  function isCardWord(word) {
+    return Boolean(word && word.kind === "cards" && word.front && word.back);
+  }
+
+  function renderCardFace(word) {
+    const showingBack = state.face === 1;
+    const parts = splitCardLine(showingBack ? word.back : word.front);
+    const flashcard = $("flashcard");
+    flashcard.dataset.face = showingBack ? "zh" : "en";
+    flashcard.dataset.kind = "cards";
+    $("cardWatermark").textContent = showingBack ? "答" : "题";
+    $("wordBlock").hidden = true;
+    $("meaningBlock").hidden = true;
+    $("cardLines").hidden = false;
+    $("faceLabelText").textContent = showingBack ? "背面 · ANSWER" : "正面 · PROMPT";
+    $("cardLinesWord").textContent = parts.word || word.en;
+    $("cardLinesPos").textContent = parts.pos;
+    $("cardLinesPos").hidden = !parts.pos;
+    $("cardLinesExtra").textContent = parts.extra;
+    $("cardLinesExtra").hidden = !parts.extra;
+    const note = showingBack ? (word.note || "").trim() : "";
+    $("cardLinesNote").textContent = note;
+    $("cardLinesNote").hidden = !note;
+    $("cardTipText").textContent = showingBack ? "下一个" : "点击看答案";
+  }
+
   function renderFace(animate) {
     const word = currentWord();
     if (!word) return;
+    if (isCardWord(word)) {
+      renderCardFace(word);
+      $("unitLabel").textContent = word.unitTitle;
+      $("unitLabel").title = [word.bookTitle, word.unitTitle].filter(Boolean).join(" · ");
+      if (animate && !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {
+        $("cardContent").classList.remove("is-updating");
+        void $("cardContent").offsetWidth;
+        $("cardContent").classList.add("is-updating");
+      }
+      return;
+    }
+    delete $("flashcard").dataset.kind;
     const kind = state.kindOrder[state.face];
     $("flashcard").dataset.face = kind;
     $("cardWatermark").textContent = kind === "zh" ? "中" : "Aa";
 
+    $("cardLines").hidden = true;
     if (kind === "zh") {
       $("wordBlock").hidden = true;
       $("meaningBlock").hidden = false;
@@ -327,6 +459,12 @@
   function updateProgress() {
     const total = state.deck.length;
     $("roundBadge").textContent = "第 " + state.round + " 轮";
+    const jump = $("jumpInput");
+    if (jump) {
+      jump.max = total ? String(total) : "";
+      jump.disabled = !total;
+      jump.title = total ? "跳转到 1–" + total + " 之间的任意位置（G）" : "跳转到指定位置";
+    }
     if (!total) return;
     const current = state.index + 1;
     const digits = Math.max(2, String(total).length);
@@ -415,6 +553,7 @@
     updatePlayer();
     playAudio();
     schedule();
+    saveProgress();
   }
 
   function previousWord() {
@@ -427,6 +566,30 @@
     updatePlayer();
     playAudio();
     schedule();
+    saveProgress();
+  }
+
+  function jumpToWord(value) {
+    if (!state.ready || !state.deck.length) return;
+    const total = state.deck.length;
+    const number = Math.round(Number(value));
+    if (!isFinite(number) || number < 1) {
+      toast("请输入 1 到 " + total + " 之间的序号");
+      return;
+    }
+    const target = Math.min(total, number) - 1;
+    clearTimer();
+    state.index = target;
+    state.face = 0;
+    renderFace(true);
+    updateProgress();
+    updatePlayer();
+    playAudio();
+    schedule();
+    saveProgress();
+    $("jumpInput").value = "";
+    $("flashcard").focus({ preventScroll: true });
+    toast("已跳到第 " + (target + 1) + " 个单词");
   }
 
   function togglePlay() {
@@ -463,14 +626,17 @@
 
   function playAudio() {
     const word = currentWord();
-    if (!word || !state.prefs.audio_enabled) return;    const url =
+    if (!word || !state.prefs.audio_enabled) return;
+    const target =
+      isCardWord(word) && state.face === 1 && word.answer ? word.answer : word.en;
+    const url =
       "https://dict.youdao.com/dictvoice?audio=" +
-      encodeURIComponent(word.en) +
+      encodeURIComponent(target) +
       "&type=2";
     try {
-      if (state.audioWord !== word.en) {
+      if (state.audioWord !== target) {
         audio.src = url;
-        state.audioWord = word.en;
+        state.audioWord = target;
       } else {
         audio.currentTime = 0;
       }
@@ -489,6 +655,16 @@
     clearTimer();
     audio.pause();
     renderSettings();
+    const intro = $("standaloneIntro");
+    if (intro) {
+      let seen = false;
+      try {
+        seen = window.localStorage.getItem(WIZARD_KEY) === "done";
+      } catch (error) {
+        seen = false;
+      }
+      intro.hidden = seen;
+    }
     updatePlayer();
     $("settingsPanel").hidden = false;
     document.body.style.overflow = "hidden";
@@ -512,6 +688,8 @@
     $("stIntervalValue").textContent = formatNumber(prefs.interval_seconds);
     $("stAudio").checked = prefs.audio_enabled;
     $("stVolume").value = String(Math.round(prefs.audio_volume * 100));
+    $("stFont").value = String(Math.round(state.fontScale * 100));
+    $("stFontValue").textContent = String(Math.round(state.fontScale * 100));
     $("stSeedField").hidden = prefs.order !== "random";
 
     const container = $("standaloneBooks");
@@ -538,7 +716,15 @@
       const units = document.createElement("div");
       units.className = "standalone-book__units";
       units.hidden = !selection;
+      let lastGroup = "";
       book.units.forEach(function (unit) {
+        if (book.kind === "cards" && unit.group && unit.group !== lastGroup) {
+          lastGroup = unit.group;
+          const header = document.createElement("div");
+          header.className = "standalone-unit-group";
+          header.textContent = unit.group;
+          units.appendChild(header);
+        }
         const label = document.createElement("label");
         label.className = "standalone-unit";
         const unitCheck = document.createElement("input");
@@ -551,7 +737,10 @@
             selection.unit_ids.indexOf(unit.id) !== -1);
         if (unitCheck.checked) label.classList.add("is-checked");
         const text = document.createElement("span");
-        text.textContent = unit.title;
+        text.textContent =
+          book.kind === "cards"
+            ? (unit.label || unit.title) + (unit.type ? " · " + unit.type : "")
+            : unit.title;
         label.appendChild(unitCheck);
         label.appendChild(text);
         units.appendChild(label);
@@ -646,6 +835,7 @@
       interval_seconds: clampNumber($("stInterval").value, 1, 30, 4),
       audio_enabled: $("stAudio").checked,
       audio_volume: clampNumber(Number($("stVolume").value) / 100, 0, 1, 0.8),
+      font_scale: clampNumber(Number($("stFont").value) / 100, 0.8, 1.8, 1),
     };
     if (state.prefs.order === "random" && !$("stSeed").value) {
       state.prefs.seed = generateSeed();
@@ -687,6 +877,10 @@
 
   /* --------------------------------------------------------------- 事件 */
   function bind() {
+    $("jumpForm").addEventListener("submit", function (event) {
+      event.preventDefault();
+      jumpToWord($("jumpInput").value);
+    });
     $("prevBtn").addEventListener("click", previousWord);
     $("nextBtn").addEventListener("click", nextWord);
     $("playBtn").addEventListener("click", togglePlay);
@@ -780,6 +974,23 @@
       commitSettings(false);
     });
 
+    $("stFont").addEventListener("input", function () {
+      $("stFontValue").textContent = $("stFont").value;
+      commitSettings(false);
+    });
+
+    $("stIntroDone").addEventListener("click", function () {
+      try {
+        window.localStorage.setItem(WIZARD_KEY, "done");
+      } catch (error) {
+        /* 忽略 */
+      }
+      $("standaloneIntro").hidden = true;
+      savePreferences();
+      closeSettings();
+      toast("设置已保存到本机");
+    });
+
     $("stReset").addEventListener("click", function () {
       state.prefs = {
         selections: [{ wordbook_id: BOOKS[0].id, unit_ids: ["all"] }],
@@ -790,6 +1001,7 @@
         interval_seconds: 4,
         audio_enabled: true,
         audio_volume: 0.8,
+        font_scale: 1,
       };
       savePreferences();
       applyPreferences();
@@ -818,6 +1030,10 @@
         previousWord();
       } else if (event.code === "KeyR") {
         playAudio();
+      } else if (event.code === "KeyG") {
+        event.preventDefault();
+        $("jumpInput").focus();
+        $("jumpInput").select();
       }
     });
 
@@ -836,4 +1052,13 @@
   bind();
   syncSoundUi();
   schedule();
+
+  // 第一次打开：直接展开设置面板，给一个三步小提示。
+  let firstRun = false;
+  try {
+    firstRun = !window.localStorage.getItem(STORE_KEY);
+  } catch (error) {
+    firstRun = false;
+  }
+  if (firstRun) openSettings();
 })();

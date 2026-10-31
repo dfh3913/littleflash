@@ -199,6 +199,82 @@
   opacity: 0.68;
 }
 
+/* ------------------------------------------------------------ 跳转输入框 */
+.jump-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 2px 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 253, 247, 0.38);
+  transition: border-color 180ms ease, background 180ms ease;
+}
+
+.jump-form:focus-within {
+  border-color: rgba(29, 107, 92, 0.38);
+  background: rgba(255, 253, 247, 0.8);
+}
+
+.jump-input {
+  width: 54px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.jump-input:focus {
+  outline: none;
+}
+
+.jump-input::-webkit-outer-spin-button,
+.jump-input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.jump-input::placeholder {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.jump-button {
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: rgba(220, 233, 144, 0.55);
+  font-family: var(--font-sans);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.jump-button:hover {
+  color: var(--ink);
+  background: rgba(220, 233, 144, 0.9);
+}
+
+.jump-button:active {
+  transform: translateY(1px);
+}
+
+.jump-input:disabled,
+.jump-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 #unitLabel {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -446,7 +522,7 @@
 .word {
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: clamp(3.35rem, 6.8vw, 5.8rem);
+  font-size: calc(clamp(3.35rem, 6.8vw, 5.8rem) * var(--lf-scale, 1));
   font-weight: 600;
   font-variation-settings: "opsz" 100, "SOFT" 40;
   line-height: 0.98;
@@ -456,13 +532,13 @@
 }
 
 .word[data-length="long"] {
-  font-size: clamp(2.25rem, 4.2vw, 3.9rem);
+  font-size: calc(clamp(2.25rem, 4.2vw, 3.9rem) * var(--lf-scale, 1));
   line-height: 1.06;
   letter-spacing: -0.04em;
 }
 
 .word[data-length="xlong"] {
-  font-size: clamp(1.6rem, 2.9vw, 2.6rem);
+  font-size: calc(clamp(1.6rem, 2.9vw, 2.6rem) * var(--lf-scale, 1));
   line-height: 1.18;
   letter-spacing: -0.03em;
 }
@@ -510,7 +586,7 @@
   padding-right: 8px;
   color: var(--ink-soft);
   font-family: var(--font-serif-cn);
-  font-size: clamp(1.2rem, 1.65vw, 1.5rem);
+  font-size: calc(clamp(1.2rem, 1.65vw, 1.5rem) * var(--lf-scale, 1));
   font-weight: 560;
   line-height: 1.75;
   letter-spacing: 0.005em;
@@ -519,12 +595,12 @@
 }
 
 .meaning[data-length="long"] {
-  font-size: clamp(1.03rem, 1.35vw, 1.25rem);
+  font-size: calc(clamp(1.03rem, 1.35vw, 1.25rem) * var(--lf-scale, 1));
   line-height: 1.72;
 }
 
 .meaning[data-length="xlong"] {
-  font-size: clamp(0.9rem, 1.1vw, 1.02rem);
+  font-size: calc(clamp(0.9rem, 1.1vw, 1.02rem) * var(--lf-scale, 1));
   line-height: 1.68;
 }
 
@@ -535,6 +611,87 @@
 .meaning::-webkit-scrollbar-thumb {
   border-radius: 8px;
   background: rgba(23, 51, 44, 0.18);
+}
+
+/* ------------------------------------------------- 卡片书（Anki 正/背面） */
+.card-lines {
+  width: min(100%, 640px);
+  margin-inline: auto;
+  max-height: 100%;
+  overflow-y: auto;
+  padding-right: 4px;
+  text-align: center;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(23, 51, 44, 0.2) transparent;
+}
+
+.card-lines__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px 14px;
+}
+
+.card-lines__word {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: calc(clamp(2.6rem, 5.2vw, 4.4rem) * var(--lf-scale, 1));
+  font-weight: 600;
+  font-variation-settings: "opsz" 100, "SOFT" 40;
+  line-height: 1.04;
+  letter-spacing: -0.045em;
+  overflow-wrap: anywhere;
+}
+
+.card-lines__word[data-length="long"] {
+  font-size: calc(clamp(1.95rem, 3.6vw, 3.05rem) * var(--lf-scale, 1));
+  letter-spacing: -0.035em;
+}
+
+.card-lines__word[data-length="xlong"] {
+  font-size: calc(clamp(1.45rem, 2.5vw, 2.1rem) * var(--lf-scale, 1));
+  letter-spacing: -0.025em;
+}
+
+.card-lines__pos {
+  color: var(--muted-strong);
+  font-family: var(--font-sans);
+  font-size: calc(clamp(14px, 1.2vw, 17px) * var(--lf-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.card-lines__extra {
+  margin-top: clamp(12px, 2vh, 19px);
+  color: var(--ink-soft);
+  font-family: var(--font-serif-cn);
+  font-size: calc(clamp(1.2rem, 1.65vw, 1.5rem) * var(--lf-scale, 1));
+  font-weight: 540;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.card-lines__note {
+  margin-top: clamp(12px, 2vh, 18px);
+  padding-top: 10px;
+  border-top: 1px dashed rgba(23, 51, 44, 0.14);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: calc(clamp(11px, 0.95vw, 13px) * var(--lf-scale, 1));
+  font-weight: 550;
+  line-height: 1.55;
+  white-space: pre-line;
+}
+
+.flashcard[data-kind="cards"] .card-watermark {
+  font-size: clamp(150px, 16vw, 210px);
+  color: rgba(29, 107, 92, 0.04);
+}
+
+.flashcard[data-kind="cards"][data-face="zh"] .card-watermark {
+  font-size: clamp(130px, 14vw, 180px);
+  color: rgba(230, 91, 53, 0.05);
 }
 
 .card-foot {
@@ -822,6 +979,15 @@
     display: none;
   }
 
+  .jump-form {
+    padding-left: 7px;
+  }
+
+  .jump-input {
+    width: 44px;
+    font-size: 9px;
+  }
+
   .flashcard {
     height: clamp(350px, 48vh, 405px);
     border-radius: 25px;
@@ -850,15 +1016,15 @@
   }
 
   .word {
-    font-size: clamp(2.8rem, 12vw, 4.7rem);
+    font-size: calc(clamp(2.8rem, 12vw, 4.7rem) * var(--lf-scale, 1));
   }
 
   .word[data-length="long"] {
-    font-size: clamp(2rem, 7.8vw, 3rem);
+    font-size: calc(clamp(2rem, 7.8vw, 3rem) * var(--lf-scale, 1));
   }
 
   .word[data-length="xlong"] {
-    font-size: clamp(1.45rem, 5.8vw, 2.05rem);
+    font-size: calc(clamp(1.45rem, 5.8vw, 2.05rem) * var(--lf-scale, 1));
   }
 
   .phonetic {
@@ -868,21 +1034,45 @@
 
   .meaning {
     max-height: 27vh;
-    font-size: clamp(1.02rem, 4.4vw, 1.2rem);
+    font-size: calc(clamp(1.02rem, 4.4vw, 1.2rem) * var(--lf-scale, 1));
     line-height: 1.68;
   }
 
   .meaning[data-length="long"] {
-    font-size: clamp(0.93rem, 3.8vw, 1.06rem);
+    font-size: calc(clamp(0.93rem, 3.8vw, 1.06rem) * var(--lf-scale, 1));
   }
 
   .meaning[data-length="xlong"] {
-    font-size: clamp(0.82rem, 3.3vw, 0.93rem);
+    font-size: calc(clamp(0.82rem, 3.3vw, 0.93rem) * var(--lf-scale, 1));
   }
 
   .meaning-quote {
     font-size: 62px;
     top: -19px;
+  }
+
+  .card-lines {
+    width: 100%;
+  }
+
+  .card-lines__word {
+    font-size: calc(clamp(2rem, 9vw, 3rem) * var(--lf-scale, 1));
+  }
+
+  .card-lines__word[data-length="long"] {
+    font-size: calc(clamp(1.55rem, 6.4vw, 2.2rem) * var(--lf-scale, 1));
+  }
+
+  .card-lines__word[data-length="xlong"] {
+    font-size: calc(clamp(1.2rem, 4.8vw, 1.6rem) * var(--lf-scale, 1));
+  }
+
+  .card-lines__pos {
+    font-size: 11px;
+  }
+
+  .card-lines__extra {
+    font-size: calc(clamp(1.05rem, 4.4vw, 1.25rem) * var(--lf-scale, 1));
   }
 
   .player {

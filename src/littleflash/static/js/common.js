@@ -214,6 +214,10 @@
     if (typeof value.audio_prefetch === "boolean") {
       clean.audio_prefetch = value.audio_prefetch;
     }
+    const fontScale = Number(value.font_scale);
+    if (isFinite(fontScale) && fontScale > 0) {
+      clean.font_scale = Math.min(1.8, Math.max(0.8, Math.round(fontScale * 100) / 100));
+    }
     const volume = Number(value.audio_volume);
     if (isFinite(volume)) {
       clean.audio_volume = Math.min(1, Math.max(0, Math.round(volume * 100) / 100));
@@ -254,6 +258,104 @@
       }
     },
     key: LOCAL_PREFS_KEY,
+  };
+
+  /* ------------------------------------------------------------ 学习进度
+     只存在这台浏览器里：记下每套学习范围停在第几个词、第几轮，
+     下次打开同一范围直接续上。 */
+  const PROGRESS_KEY = "littleflash.progress.v1";
+  const PROGRESS_MAX_ENTRIES = 24;
+
+  const progress = {
+    readAll: function () {
+      try {
+        const raw = window.localStorage.getItem(PROGRESS_KEY);
+        if (!raw) return {};
+        const value = JSON.parse(raw);
+        return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      } catch (error) {
+        return {};
+      }
+    },
+    read: function (key) {
+      if (!key) return null;
+      const entry = this.readAll()[key];
+      if (!entry || typeof entry !== "object") return null;
+      const index = Number(entry.i);
+      const round = Number(entry.r);
+      if (!isFinite(index) || index < 0) return null;
+      return {
+        index: Math.floor(index),
+        round: isFinite(round) && round > 0 ? Math.floor(round) : 1,
+        updatedAt: Number(entry.t) || 0,
+      };
+    },
+    write: function (key, value) {
+      if (!key) return false;
+      const all = this.readAll();
+      all[key] = {
+        i: Math.max(0, Math.floor(Number(value && value.index) || 0)),
+        r: Math.max(1, Math.floor(Number(value && value.round) || 1)),
+        t: Date.now(),
+      };
+      const entries = Object.keys(all)
+        .map(function (name) {
+          return [name, all[name]];
+        })
+        .sort(function (a, b) {
+          return (Number(b[1] && b[1].t) || 0) - (Number(a[1] && a[1].t) || 0);
+        })
+        .slice(0, PROGRESS_MAX_ENTRIES);
+      const trimmed = {};
+      entries.forEach(function (pair) {
+        trimmed[pair[0]] = pair[1];
+      });
+      try {
+        window.localStorage.setItem(PROGRESS_KEY, JSON.stringify(trimmed));
+        return true;
+      } catch (error) {
+        return false;
+      }
+    },
+    clear: function () {
+      try {
+        window.localStorage.removeItem(PROGRESS_KEY);
+      } catch (error) {
+        /* no-op */
+      }
+    },
+    key: PROGRESS_KEY,
+  };
+
+  /* -------------------------------------------------------------- 首次向导 */
+  const WIZARD_KEY = "littleflash.wizard.v1";
+
+  const wizard = {
+    key: WIZARD_KEY,
+    /* 已经动过设置（本机有偏好）或标记过完成就不再打扰。 */
+    needs: function () {
+      try {
+        if (window.localStorage.getItem(WIZARD_KEY) === "done") return false;
+        if (window.localStorage.getItem(LOCAL_PREFS_KEY)) return false;
+      } catch (error) {
+        return false;
+      }
+      return true;
+    },
+    done: function () {
+      try {
+        window.localStorage.setItem(WIZARD_KEY, "done");
+      } catch (error) {
+        /* no-op */
+      }
+    },
+    reset: function () {
+      try {
+        window.localStorage.removeItem(WIZARD_KEY);
+      } catch (error) {
+        /* no-op */
+      }
+    },
   };
 
   class ApiError extends Error {
@@ -425,6 +527,13 @@
     );
   }
 
+  /* 卡片字号：0.8–1.8 倍，作用在 --lf-scale 上，正文大小不受影响。 */
+  function applyFontScale(scale) {
+    const value = Math.min(1.8, Math.max(0.8, Number(scale) || 1));
+    document.documentElement.style.setProperty("--lf-scale", String(value));
+    return value;
+  }
+
   function isEditableTarget(target) {
     if (!target || !(target instanceof Element)) return false;
     if (target.isContentEditable) return true;
@@ -457,16 +566,39 @@
     return STAGE_LABELS[key] || String(stage);
   }
 
+  /* 卡片书（Anki 牌组）的正/背面：第一行按「词条 + 两个空格 + 词性释义」拆开，
+     其余行作为补充说明，前端据此做大小字号混排。 */
+  function splitCardLine(text) {
+    const lines = String(text == null ? "" : text)
+      .split("\n")
+      .map(function (line) {
+        return line.replace(/\s+$/, "");
+      })
+      .filter(function (line) {
+        return line.length > 0;
+      });
+    const first = lines.shift() || "";
+    const match = first.match(/^(.{1,86}?)\s{2,}(.+)$/);
+    return {
+      word: match ? match[1] : first,
+      pos: match ? match[2] : "",
+      extra: lines.join("\n"),
+    };
+  }
+
   window.LF = {
     api: api,
     url: url,
     base: basePath,
     localPrefs: localPrefs,
+    progress: progress,
+    wizard: wizard,
     ApiError: ApiError,
     toast: toast,
     setLoading: setLoading,
     debounce: debounce,
     updateRangeFill: updateRangeFill,
+    applyFontScale: applyFontScale,
     prefersReducedMotion: prefersReducedMotion,
     isEditableTarget: isEditableTarget,
     padNumber: padNumber,
@@ -479,6 +611,7 @@
     selectionQuery: selectionQuery,
     shuffleWithSeed: shuffleWithSeed,
     seededRandom: seededRandom,
+    splitCardLine: splitCardLine,
     csrfToken: csrfToken,
   };
 })();

@@ -10,6 +10,25 @@
   // 预览窗一次拉取多少张卡，供上一张/下一张切换。
   const PREVIEW_SAMPLE_SIZE = 24;
 
+  // 首次使用向导的三步，既用于文案也用于把对应设置卡片滚动到视野里。
+  const WIZARD_STEPS = [
+    {
+      target: "bookSection",
+      title: "第 1 步 · 选择学习范围",
+      body: "勾选词书后，在展开的列表里点选至少一个单元。可以同时选多本词书、每本的多个单元。",
+    },
+    {
+      target: "displaySection",
+      title: "第 2 步 · 设定闪示节奏",
+      body: "普通词书可以选先英后中或先中后英；「词性转换」卡片固定先正面后背面，不受这里影响。",
+    },
+    {
+      target: "audioSection",
+      title: "第 3 步 · 确认声音",
+      body: "开启后每一面都会朗读当前单词。浏览器首次播放需要一次点击授权，之后会自动播放。",
+    },
+  ];
+
   initLogin();
   initSettings();
 
@@ -166,6 +185,15 @@
       intervalHint: $("intervalHint"),
       audioToggle: $("audioToggle"),
       audioPrefetchToggle: $("audioPrefetchToggle"),
+      formationToggle: $("formationToggle"),
+      formationOptions: $("formationOptions"),
+      cacheIntervalRange: $("cacheIntervalRange"),
+      cacheIntervalOutput: $("cacheIntervalOutput"),
+      cacheLimitInput: $("cacheLimitInput"),
+      cacheLimitOutput: $("cacheLimitOutput"),
+      cacheStats: $("cacheStats"),
+      fontRange: $("fontRange"),
+      fontOutput: $("fontOutput"),
       volumeField: $("volumeField"),
       volumeRange: $("volumeRange"),
       volumeOutput: $("volumeOutput"),
@@ -194,6 +222,16 @@
       previewNext: $("previewNext"),
       previewBadge: $("previewBadge"),
       previewBadgeText: $("previewBadgeText"),
+      wizard: $("wizard"),
+      wizardTitle: $("wizardTitle"),
+      wizardBody: $("wizardBody"),
+      wizardSteps: $("wizardSteps"),
+      wizardNote: $("wizardNote"),
+      wizardBack: $("wizardBack"),
+      wizardNext: $("wizardNext"),
+      wizardSkip: $("wizardSkip"),
+      wizardPull: $("wizardPull"),
+      wizardReopen: $("wizardReopen"),
     };
 
     const modeMeta = document.querySelector('meta[name="settings-mode"]');
@@ -216,6 +254,8 @@
       previewTimer: null,
       previewHidden: document.hidden,
       resetBusy: false,
+      wizardStep: 0,
+      reloadAfterSave: false,
     };
 
     const previewAudio = new Audio();
@@ -231,15 +271,19 @@
     boot();
 
     async function boot() {
+      buildFormationPickers();
       if (state.localMode) {
         applyLocalPreferences();
       }
       syncBookUi();
       syncRangeVisuals();
       syncIntervalUi(false);
+      syncFontUi();
       syncVolumeUi();
       syncAudioUi();
       syncSeedUi();
+      syncFormationUi();
+      syncCacheUi();
       renderPreview();
       setupPreviewTimer();
       syncPreviewControls();
@@ -252,6 +296,35 @@
       }
       // 首屏先取一小批单词，预览窗才有多张可以切换。
       if (readSelections().length) loadPreview();
+      initWizard();
+    }
+
+    /* ---------------------------------------------------------- 词性转换 */
+    function syncFormationUi() {
+      if (!dom.formationToggle) return;
+      const enabled = dom.formationToggle.checked;
+      if (dom.formationOptions) {
+        dom.formationOptions.classList.toggle("is-inactive", !enabled);
+        dom.formationOptions.querySelectorAll("input").forEach(function (input) {
+          input.disabled = !enabled;
+        });
+      }
+    }
+
+    /* ------------------------------------------------------------ 缓存 */
+    function syncCacheUi() {
+      if (dom.cacheIntervalRange) {
+        LF.updateRangeFill(dom.cacheIntervalRange);
+        if (dom.cacheIntervalOutput) {
+          dom.cacheIntervalOutput.textContent = formatInterval(
+            Number(dom.cacheIntervalRange.value)
+          );
+        }
+      }
+      if (dom.cacheLimitInput && dom.cacheLimitOutput) {
+        const limit = clampInt(dom.cacheLimitInput.value, 100, 20000, 2000);
+        dom.cacheLimitOutput.textContent = String(limit);
+      }
     }
 
     function savedLabel() {
@@ -292,6 +365,14 @@
           dom.volumeRange.value = String(Math.round(Math.min(1, Math.max(0, volume)) * 100));
         }
       }
+      if (dom.fontRange) {
+        const scale = Number(stored.font_scale);
+        if (isFinite(scale) && scale > 0) {
+          dom.fontRange.value = String(
+            Math.round(Math.min(1.8, Math.max(0.8, scale)) * 100)
+          );
+        }
+      }
     }
 
     function booksFromDom() {
@@ -326,6 +407,30 @@
         dom.bookPicker.addEventListener("change", function (event) {
           const target = event.target;
           if (!(target instanceof HTMLInputElement)) return;
+          if (target.classList.contains("formation-group__check")) {
+            const group = target.closest(".formation-group");
+            if (group) {
+              group.querySelectorAll(".unit-pick__check").forEach(function (check) {
+                check.checked = target.checked;
+              });
+            }
+            const bookEl = target.closest(".book-pick");
+            if (bookEl) {
+              const bookCheck = bookEl.querySelector(".book-pick__check");
+              const anyChecked =
+                bookEl.querySelector(".unit-pick__check:checked") !== null;
+              if (bookCheck) bookCheck.checked = target.checked || anyChecked;
+            }
+            if (target.checked && group) {
+              group.classList.add("is-open");
+              const toggle = group.querySelector(".formation-group__toggle");
+              if (toggle) toggle.setAttribute("aria-expanded", "true");
+            }
+            syncBookUi();
+            queueSave();
+            requestPreview();
+            return;
+          }
           if (target.classList.contains("book-pick__check")) {
             const bookEl = target.closest(".book-pick");
             // 勾选词书只展开单元列表，默认不预选任何单元；取消勾选才清空本书单元。
@@ -358,6 +463,29 @@
         });
 
         dom.bookPicker.addEventListener("click", function (event) {
+          const formationButton = event.target.closest(
+            "[data-formation-all], [data-formation-none]"
+          );
+          if (formationButton) {
+            event.preventDefault();
+            const bookId =
+              formationButton.getAttribute("data-formation-all") ||
+              formationButton.getAttribute("data-formation-none");
+            const bookEl = dom.bookPicker.querySelector(
+              '.book-pick[data-book-id="' + CSS.escape(bookId) + '"]'
+            );
+            if (!bookEl) return;
+            const selectAll = formationButton.hasAttribute("data-formation-all");
+            bookEl.querySelectorAll(".unit-pick__check").forEach(function (check) {
+              check.checked = selectAll;
+            });
+            const bookCheck = bookEl.querySelector(".book-pick__check");
+            if (bookCheck) bookCheck.checked = selectAll;
+            syncBookUi();
+            queueSave();
+            requestPreview();
+            return;
+          }
           const button = event.target.closest("[data-unit-all], [data-unit-none]");
           if (!button) return;
           event.preventDefault();
@@ -424,6 +552,61 @@
       if (dom.audioPrefetchToggle) {
         dom.audioPrefetchToggle.addEventListener("change", function () {
           queueSave();
+        });
+      }
+
+      if (dom.formationToggle) {
+        dom.formationToggle.addEventListener("change", function () {
+          syncFormationUi();
+          state.reloadAfterSave = true;
+          queueSave({ immediate: true });
+        });
+      }
+
+      ["formation_group", "formation_filter"].forEach(function (name) {
+        document.querySelectorAll('input[name="' + name + '"]').forEach(function (input) {
+          input.addEventListener("change", function () {
+            state.reloadAfterSave = true;
+            requestPreview();
+            queueSave({ immediate: true });
+          });
+        });
+      });
+
+      if (dom.cacheIntervalRange) {
+        dom.cacheIntervalRange.addEventListener("input", function () {
+          syncCacheUi();
+          queueSave();
+        });
+        dom.cacheIntervalRange.addEventListener("change", function () {
+          queueSave({ immediate: true });
+        });
+      }
+
+      if (dom.cacheLimitInput) {
+        dom.cacheLimitInput.addEventListener("change", function () {
+          dom.cacheLimitInput.value = String(
+            clampInt(dom.cacheLimitInput.value, 100, 20000, 2000)
+          );
+          syncCacheUi();
+          queueSave({ immediate: true });
+        });
+        dom.cacheLimitInput.addEventListener("input", function () {
+          if (dom.cacheLimitOutput) {
+            dom.cacheLimitOutput.textContent = String(
+              clampInt(dom.cacheLimitInput.value, 100, 20000, 2000)
+            );
+          }
+        });
+      }
+
+      if (dom.fontRange) {
+        dom.fontRange.addEventListener("input", function () {
+          syncFontUi();
+          queueSave();
+        });
+        dom.fontRange.addEventListener("change", function () {
+          queueSave({ immediate: true });
         });
       }
 
@@ -591,6 +774,7 @@
           unitEl.classList.toggle("is-checked", Boolean(check && check.checked));
         });
       });
+      syncFormationGroups(dom.bookPicker);
       updatePickerSummary();
     }
 
@@ -636,6 +820,150 @@
         });
       });
       syncBookUi();
+    }
+
+    /* ------------------------------------------------- 词性转换选择界面
+       卡片书不按普通词书那样平铺单元，而是按「大类 → 变法（→ 常规/非常规）」
+       渲染成一棵可勾选的树，组头支持三态全选。 */
+    function buildFormationPickers() {
+      document.querySelectorAll(".formation-groups").forEach(function (container) {
+        const wrap = container.closest(".book-pick__units");
+        if (!wrap) return;
+        const bookId = container.getAttribute("data-formation-book") || "";
+        const dataNode = wrap.querySelector(".formation-data");
+        const selectedNode = wrap.querySelector(".formation-selected");
+        let units = [];
+        let selected = [];
+        try {
+          units = JSON.parse(dataNode ? dataNode.textContent : "[]");
+        } catch (error) {
+          units = [];
+        }
+        try {
+          selected = JSON.parse(selectedNode ? selectedNode.textContent : "[]");
+        } catch (error) {
+          selected = [];
+        }
+        if (!Array.isArray(units) || !units.length) return;
+
+        const allSelected = selected.indexOf("all") !== -1;
+        const chosen = new Set(
+          allSelected
+            ? units.map(function (unit) {
+                return unit.id;
+              })
+            : selected
+        );
+
+        const groups = new Map();
+        units.forEach(function (unit) {
+          const key = unit.group || unit.title || "其他";
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(unit);
+        });
+
+        container.textContent = "";
+        groups.forEach(function (items, title) {
+          const section = document.createElement("section");
+          section.className = "formation-group";
+          const anyChosen = items.some(function (unit) {
+            return chosen.has(unit.id);
+          });
+          section.classList.toggle("is-open", anyChosen);
+
+          const head = document.createElement("div");
+          head.className = "formation-group__head";
+
+          const groupCheck = document.createElement("input");
+          groupCheck.type = "checkbox";
+          groupCheck.className = "formation-group__check";
+          groupCheck.setAttribute("data-book", bookId);
+
+          const toggle = document.createElement("button");
+          toggle.type = "button";
+          toggle.className = "formation-group__toggle";
+          toggle.setAttribute("aria-expanded", anyChosen ? "true" : "false");
+
+          const name = document.createElement("span");
+          name.className = "formation-group__title";
+          name.textContent = title;
+
+          const count = document.createElement("span");
+          count.className = "formation-group__count";
+          count.textContent =
+            items.reduce(function (sum, unit) {
+              return sum + (Number(unit.wordCount) || 0);
+            }, 0) + " 词";
+
+          const chevron = document.createElement("span");
+          chevron.className = "formation-group__chevron";
+          chevron.setAttribute("aria-hidden", "true");
+
+          toggle.append(name, count, chevron);
+          head.append(groupCheck, toggle);
+          section.append(head);
+
+          toggle.addEventListener("click", function () {
+            const open = !section.classList.contains("is-open");
+            section.classList.toggle("is-open", open);
+            toggle.setAttribute("aria-expanded", open ? "true" : "false");
+          });
+
+          const list = document.createElement("div");
+          list.className = "formation-group__units";
+          items.forEach(function (unit) {
+            const row = document.createElement("label");
+            row.className = "unit-pick formation-unit";
+            row.setAttribute("data-word-count", unit.wordCount);
+
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.className = "unit-pick__check";
+            input.value = unit.id;
+            input.setAttribute("data-book", bookId);
+            input.checked = chosen.has(unit.id);
+
+            const label = document.createElement("span");
+            label.className = "formation-unit__label";
+            label.textContent =
+              unit.label && unit.label !== title ? unit.label : "全部";
+
+            row.append(input, label);
+            if (unit.type) {
+              const badge = document.createElement("span");
+              badge.className = "formation-unit__type";
+              badge.dataset.type = unit.type === "常规" ? "regular" : "special";
+              badge.textContent = unit.type;
+              row.append(badge);
+            }
+            const small = document.createElement("small");
+            small.textContent = (Number(unit.wordCount) || 0) + " 词";
+            row.append(small);
+            list.append(row);
+          });
+          section.append(list);
+          container.append(section);
+        });
+
+        syncFormationGroups(container);
+      });
+    }
+
+    function syncFormationGroups(root) {
+      const scope = root || dom.bookPicker;
+      if (!scope) return;
+      scope.querySelectorAll(".formation-group").forEach(function (group) {
+        const head = group.querySelector(".formation-group__check");
+        const checks = group.querySelectorAll(".unit-pick__check");
+        if (!head) return;
+        let checked = 0;
+        checks.forEach(function (check) {
+          if (check.checked) checked += 1;
+        });
+        head.checked = checks.length > 0 && checked === checks.length;
+        head.indeterminate = checked > 0 && checked < checks.length;
+        group.classList.toggle("is-active", checked > 0);
+      });
     }
 
     function updatePickerSummary() {
@@ -801,6 +1129,11 @@
 
     function renderPreview() {
       const sample = currentSample();
+      if (sample && sample.kind === "cards" && sample.front && sample.back) {
+        renderCardPreview(sample);
+        return;
+      }
+      if (dom.previewCard) delete dom.previewCard.dataset.kind;
       const front = getFront();
       const kind = state.previewFace === 0 ? front : front === "en" ? "zh" : "en";
 
@@ -838,6 +1171,50 @@
       updatePreviewAudioVolume();
     }
 
+    /* 卡片书预览：正面 → 背面，和首页保持一致。 */
+    function renderCardPreview(sample) {
+      const showingBack = state.previewFace === 1;
+      const parts = LF.splitCardLine(showingBack ? sample.back : sample.front);
+
+      if (dom.previewCard) dom.previewCard.dataset.kind = "cards";
+      if (dom.previewCard) dom.previewCard.dataset.face = showingBack ? "zh" : "en";
+      if (dom.previewFaceLabel) {
+        dom.previewFaceLabel.textContent = showingBack ? "背面 · ANSWER" : "正面 · PROMPT";
+      }
+      if (dom.previewWatermark) {
+        dom.previewWatermark.textContent = showingBack ? "答" : "题";
+      }
+      if (dom.previewWordBlock) dom.previewWordBlock.hidden = false;
+      if (dom.previewWord) {
+        dom.previewWord.textContent = parts.word || sample.en || "";
+        const length = (parts.word || sample.en || "").length;
+        dom.previewWord.classList.toggle("is-long", length > 11);
+        dom.previewWord.classList.toggle("is-xlong", length > 19);
+      }
+      if (dom.previewPhonetic) {
+        dom.previewPhonetic.textContent = parts.pos || "";
+        dom.previewPhonetic.hidden = !parts.pos;
+      }
+      if (dom.previewMeaningBlock) dom.previewMeaningBlock.hidden = !showingBack;
+      if (dom.previewMeaning) {
+        const extra = showingBack
+          ? [parts.extra, (sample.note || "").trim()].filter(Boolean).join("\n")
+          : "";
+        dom.previewMeaning.textContent = extra || (showingBack ? "（没有补充说明）" : "");
+        dom.previewMeaning.classList.add("is-card");
+        dom.previewMeaning.classList.toggle("is-long", extra.length > 32);
+        dom.previewMeaning.classList.toggle("is-xlong", extra.length > 80);
+      }
+      if (dom.previewUnit) dom.previewUnit.textContent = sample.unitTitle || "预览";
+      if (dom.previewIndex) {
+        const total = state.samples.length;
+        const position = pad2(state.sampleIndex + 1);
+        dom.previewIndex.textContent =
+          total > 1 ? position + " / " + pad2(total) : position;
+      }
+      updatePreviewAudioVolume();
+    }
+
     function pad2(number) {
       return String(number).padStart(2, "0");
     }
@@ -845,7 +1222,12 @@
     function updatePreviewCaption() {
       if (!dom.previewCaption) return;
       const parts = [];
-      parts.push(getFront() === "zh" ? "先中后英" : "先英后中");
+      const sample = currentSample();
+      if (sample && sample.kind === "cards") {
+        parts.push("正面 → 背面");
+      } else {
+        parts.push(getFront() === "zh" ? "先中后英" : "先英后中");
+      }
       parts.push(getOrder() === "random" ? "随机种子" : "词书顺序");
       parts.push(
         getMode() === "manual"
@@ -1007,6 +1389,29 @@
       if (dom.audioPrefetchToggle) {
         payload.audio_prefetch = dom.audioPrefetchToggle.checked;
       }
+      const formationGroup = document.querySelector(
+        'input[name="formation_group"]:checked'
+      );
+      if (formationGroup) payload.formation_group = formationGroup.value;
+      const formationFilter = document.querySelector(
+        'input[name="formation_filter"]:checked'
+      );
+      if (formationFilter) payload.formation_filter = formationFilter.value;
+      if (dom.formationToggle) {
+        payload.formation_enabled = dom.formationToggle.checked;
+      }
+      if (dom.cacheIntervalRange) {
+        const interval = Number(dom.cacheIntervalRange.value);
+        if (isFinite(interval)) {
+          payload.cache_interval_seconds = Math.round(interval * 10) / 10;
+        }
+      }
+      if (dom.cacheLimitInput) {
+        payload.cache_limit = clampInt(dom.cacheLimitInput.value, 100, 20000, 2000);
+      }
+      if (dom.fontRange) {
+        payload.font_scale = clampInt(dom.fontRange.value, 80, 180, 100) / 100;
+      }
       return payload;
     }
 
@@ -1084,6 +1489,19 @@
         if (result.preferences && result.preferences.seed && dom.seedInput) {
           dom.seedInput.value = result.preferences.seed;
         }
+        if (state.reloadAfterSave) {
+          state.reloadAfterSave = false;
+          state.hasUnsaved = false;
+          setSaveStatus("saved", "词书结构已更新，正在刷新…");
+          LF.toast("已更新「词性转换」的展示方式，正在刷新…", {
+            type: "success",
+            duration: 1800,
+          });
+          window.setTimeout(function () {
+            window.location.reload();
+          }, 760);
+          return;
+        }
         if (state.pendingWhileSaving) {
           setSaveStatus("saving", "正在保存更改…");
         } else {
@@ -1153,7 +1571,16 @@
     /* ------------------------------------------------------------- 表单同步 */
     function syncRangeVisuals() {
       if (dom.intervalRange) LF.updateRangeFill(dom.intervalRange);
+      if (dom.fontRange) LF.updateRangeFill(dom.fontRange);
       if (dom.volumeRange) LF.updateRangeFill(dom.volumeRange);
+    }
+
+    function syncFontUi() {
+      if (!dom.fontRange) return;
+      const value = clampInt(dom.fontRange.value, 80, 180, 100);
+      if (dom.fontOutput) dom.fontOutput.textContent = String(value);
+      LF.updateRangeFill(dom.fontRange);
+      LF.applyFontScale(value / 100);
     }
 
     function syncIntervalUi(restartPreview) {
@@ -1202,6 +1629,242 @@
       const number = Number(value);
       if (!isFinite(number)) return "4";
       return Number.isInteger(number) ? String(number) : number.toFixed(1);
+    }
+
+    function clampInt(value, minimum, maximum, fallback) {
+      const number = Math.round(Number(value));
+      if (!isFinite(number)) return fallback;
+      return Math.min(maximum, Math.max(minimum, number));
+    }
+
+    /* --------------------------------------------------------- 首次使用向导 */
+    function initWizard() {
+      if (!dom.wizard) return;
+      if (dom.wizardReopen) {
+        dom.wizardReopen.addEventListener("click", function () {
+          openWizard();
+        });
+      }
+      if (dom.wizardSkip) {
+        dom.wizardSkip.addEventListener("click", function () {
+          LF.wizard.done();
+          closeWizard();
+        });
+      }
+      if (dom.wizardBack) {
+        dom.wizardBack.addEventListener("click", function () {
+          showWizardStep(state.wizardStep - 1);
+        });
+      }
+      if (dom.wizardNext) {
+        dom.wizardNext.addEventListener("click", function () {
+          if (state.wizardStep >= WIZARD_STEPS.length - 1) {
+            finishWizard();
+          } else {
+            showWizardStep(state.wizardStep + 1);
+          }
+        });
+      }
+      if (dom.wizardPull) {
+        dom.wizardPull.addEventListener("click", pullServerConfig);
+      }
+      if (dom.wizardSteps) {
+        dom.wizardSteps.addEventListener("click", function (event) {
+          const item = event.target.closest("li[data-target]");
+          if (!item) return;
+          const index = Array.prototype.indexOf.call(dom.wizardSteps.children, item);
+          if (index >= 0) showWizardStep(index);
+        });
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("wizard") === "1" || LF.wizard.needs()) {
+        openWizard();
+      }
+    }
+
+    function openWizard() {
+      if (!dom.wizard || dom.wizard.open) return;
+      showWizardStep(0);
+      if (typeof dom.wizard.showModal === "function") {
+        dom.wizard.showModal();
+      } else {
+        dom.wizard.setAttribute("open", "");
+      }
+      window.setTimeout(function () {
+        if (dom.wizardNext) dom.wizardNext.focus({ preventScroll: true });
+      }, 60);
+    }
+
+    function closeWizard() {
+      if (!dom.wizard) return;
+      document.querySelectorAll(".is-wizard-focus").forEach(function (node) {
+        node.classList.remove("is-wizard-focus");
+      });
+      if (typeof dom.wizard.close === "function" && dom.wizard.open) {
+        dom.wizard.close();
+      } else {
+        dom.wizard.removeAttribute("open");
+      }
+    }
+
+    function showWizardStep(index) {
+      const step = WIZARD_STEPS[Math.max(0, Math.min(WIZARD_STEPS.length - 1, index))];
+      state.wizardStep = WIZARD_STEPS.indexOf(step);
+      if (dom.wizardTitle) dom.wizardTitle.textContent = step.title;
+      if (dom.wizardBody) dom.wizardBody.textContent = step.body;
+
+      if (dom.wizardSteps) {
+        Array.prototype.forEach.call(dom.wizardSteps.children, function (item, position) {
+          const active = position === state.wizardStep;
+          item.classList.toggle("is-active", active);
+          item.classList.toggle("is-done", position < state.wizardStep);
+          item.setAttribute("aria-current", active ? "step" : "false");
+        });
+      }
+
+      document.querySelectorAll(".is-wizard-focus").forEach(function (node) {
+        node.classList.remove("is-wizard-focus");
+      });
+      const target = document.getElementById(step.target);
+      if (target) {
+        target.classList.add("is-wizard-focus");
+        target.scrollIntoView({
+          behavior: LF.prefersReducedMotion() ? "auto" : "smooth",
+          block: "start",
+        });
+      }
+
+      if (dom.wizardBack) dom.wizardBack.disabled = state.wizardStep === 0;
+      if (dom.wizardNext) {
+        const label = dom.wizardNext.querySelector(".primary-action__label");
+        if (label) {
+          label.textContent =
+            state.wizardStep === WIZARD_STEPS.length - 1 ? "开始学习" : "下一步";
+        }
+        dom.wizardNext.setAttribute(
+          "aria-label",
+          state.wizardStep === WIZARD_STEPS.length - 1 ? "开始学习" : "下一步"
+        );
+      }
+      if (dom.wizardNote) dom.wizardNote.textContent = wizardNote();
+    }
+
+    function wizardNote() {
+      if (state.wizardStep === 0) {
+        const selections = readSelections();
+        let units = 0;
+        let words = 0;
+        selections.forEach(function (selection) {
+          const bookEl = dom.bookPicker.querySelector(
+            '.book-pick[data-book-id="' + CSS.escape(selection.wordbook_id) + '"]'
+          );
+          if (!bookEl) return;
+          bookEl.querySelectorAll(".unit-pick").forEach(function (unitEl) {
+            const check = unitEl.querySelector(".unit-pick__check");
+            if (check && check.checked) {
+              units += 1;
+              words += Number(unitEl.getAttribute("data-word-count")) || 0;
+            }
+          });
+        });
+        if (!selections.length) return "还没有选择范围，先勾选一本词书吧。";
+        return (
+          "已选 " + selections.length + " 本词书 · " + units + " 个单元 · 约 " +
+          words.toLocaleString() + " 个单词"
+        );
+      }
+      if (state.wizardStep === 1) {
+        return [
+          getFront() === "zh" ? "先中后英" : "先英后中",
+          getOrder() === "random" ? "随机顺序" : "词书顺序",
+          getMode() === "manual" ? "手动切换" : "自动 " + formatInterval(getInterval()) + " 秒/面",
+        ].join(" · ");
+      }
+      const audioOn = dom.audioToggle ? dom.audioToggle.checked : true;
+      return (
+        "发音 " + (audioOn ? "开启" : "关闭") +
+        " · 音量 " + (dom.volumeRange ? dom.volumeRange.value : "80") + "%"
+      );
+    }
+
+    async function pullServerConfig() {
+      if (dom.wizardPull) LF.setLoading(dom.wizardPull, true);
+      try {
+        const result = await LF.api("/api/settings", { timeout: 10000 });
+        const prefs = result && result.preferences;
+        if (!prefs) throw new LF.ApiError("服务器没有返回配置", 0, "empty_config");
+        applySelections(LF.normalizeSelections(prefs, booksFromDom()));
+        setChoice("front", prefs.front === "zh" ? "zh" : "en");
+        setChoice("order", prefs.order === "random" ? "random" : "sequence");
+        setChoice("mode", prefs.mode === "manual" ? "manual" : "auto");
+        if (dom.seedInput) dom.seedInput.value = LF.sanitizeSeed(prefs.seed);
+        if (dom.intervalRange) {
+          dom.intervalRange.value = String(
+            Math.min(30, Math.max(1, Number(prefs.interval_seconds) || 4))
+          );
+        }
+        if (dom.audioToggle && typeof prefs.audio_enabled === "boolean") {
+          dom.audioToggle.checked = prefs.audio_enabled;
+        }
+        if (dom.volumeRange) {
+          const volume = Number(prefs.audio_volume);
+          dom.volumeRange.value = String(
+            Math.round(Math.min(1, Math.max(0, isFinite(volume) ? volume : 0.8)) * 100)
+          );
+        }
+        if (dom.audioPrefetchToggle && typeof prefs.audio_prefetch === "boolean") {
+          dom.audioPrefetchToggle.checked = prefs.audio_prefetch;
+        }
+        if (dom.fontRange) {
+          const scale = Number(prefs.font_scale);
+          if (isFinite(scale) && scale > 0) {
+            dom.fontRange.value = String(
+              Math.round(Math.min(1.8, Math.max(0.8, scale)) * 100)
+            );
+          }
+        }
+        syncBookUi();
+        syncRangeVisuals();
+        syncIntervalUi(false);
+        syncFontUi();
+        syncVolumeUi();
+        syncAudioUi();
+        syncSeedUi();
+        renderPreview();
+        updatePreviewCaption();
+        queueSave({ immediate: true });
+        LF.toast("已套用服务器上的配置", { type: "success", duration: 2200 });
+        showWizardStep(state.wizardStep);
+      } catch (error) {
+        LF.toast(
+          (error && error.message) || "拉取服务器配置失败，请稍后重试",
+          { type: "error", duration: 3600 }
+        );
+      } finally {
+        if (dom.wizardPull) LF.setLoading(dom.wizardPull, false);
+      }
+    }
+
+    function finishWizard() {
+      LF.wizard.done();
+      queueSave({ immediate: true });
+      closeWizard();
+      LF.toast("设置已就绪，开始闪词吧", { type: "success", duration: 2200 });
+      goHomeWhenSaved();
+    }
+
+    /* 等保存落地再跳走，避免服务器模式下最后一步改动丢失。 */
+    function goHomeWhenSaved() {
+      const started = Date.now();
+      (function wait() {
+        const busy = state.saving || (state.hasUnsaved && !state.saveFailed);
+        if (busy && Date.now() - started < 4000) {
+          window.setTimeout(wait, 120);
+          return;
+        }
+        window.location.href = LF.url("/");
+      })();
     }
 
     /* --------------------------------------------------------------- 重置/退出 */

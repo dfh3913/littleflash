@@ -103,7 +103,7 @@
         </div>
       {% endif %}
 
-      <section class="setting-card" aria-labelledby="bookSectionTitle">
+      <section class="setting-card" id="bookSection" aria-labelledby="bookSectionTitle">
         <header class="setting-card__head">
           <span class="section-number">01</span>
           <div>
@@ -114,6 +114,28 @@
 
         <div class="book-picker" id="bookPicker">
           {% for book in books %}
+            {% if book.kind == 'cards' %}
+            <div class="book-pick book-pick--formation" data-book-id="{{ book.id }}" data-word-count="{{ book.wordCount }}">
+              <label class="book-pick__head">
+                <input class="book-pick__check" type="checkbox" value="{{ book.id }}"
+                  {% if book.id in selection_map %}checked{% endif %}>
+                <span class="book-pick__title">{{ book.title }}</span>
+                <span class="book-pick__meta">
+                  Anki 牌组 · {{ book.unitCount }} 个分组 · {{ book.wordCount }} 张卡片 · 固定先正面后背面
+                </span>
+              </label>
+              <div class="book-pick__units formation-units" {% if book.id not in selection_map %}hidden{% endif %}>
+                <div class="book-pick__tools formation-tools">
+                  <span class="formation-tools__hint">按「大类 → 变法」勾选，可只练常规或非常规</span>
+                  <button class="mini-button" type="button" data-formation-all="{{ book.id }}">全选</button>
+                  <button class="mini-button" type="button" data-formation-none="{{ book.id }}">清空</button>
+                </div>
+                <div class="formation-groups" data-formation-book="{{ book.id }}"></div>
+                <script type="application/json" class="formation-data">{{ book.units|tojson }}</script>
+                <script type="application/json" class="formation-selected">{{ selection_map.get(book.id, [])|tojson }}</script>
+              </div>
+            </div>
+            {% else %}
             <div class="book-pick" data-book-id="{{ book.id }}" data-word-count="{{ book.wordCount }}">
               <label class="book-pick__head">
                 <input class="book-pick__check" type="checkbox" value="{{ book.id }}"
@@ -139,6 +161,7 @@
                 {% endfor %}
               </div>
             </div>
+            {% endif %}
           {% endfor %}
         </div>
         {% if books %}
@@ -146,9 +169,73 @@
         {% endif %}
       </section>
 
-      <section class="setting-card" aria-labelledby="displaySectionTitle">
+      {% if authenticated and books|selectattr('kind', 'equalto', 'cards')|list %}
+      <section class="setting-card" id="formationSection" aria-labelledby="formationSectionTitle">
         <header class="setting-card__head">
           <span class="section-number">02</span>
+          <div>
+            <h2 id="formationSectionTitle">词性转换词书</h2>
+            <p>「词性转换」来自 Anki 牌组，卡片固定先看正面再看背面；这里控制它怎样出现在词库里。</p>
+          </div>
+        </header>
+
+        <div class="toggle-row">
+          <span class="toggle-row__icon" aria-hidden="true"><svg class="icon"><use href="#icon-book"></use></svg></span>
+          <div class="toggle-row__copy">
+            <strong>在词库中显示</strong>
+            <p>关闭后这本词书不会出现在选择列表，也不会进入学习范围。</p>
+          </div>
+          <label class="switch">
+            <input id="formationToggle" name="formation_enabled" type="checkbox" {% if not preferences or preferences.formation_enabled %}checked{% endif %}>
+            <span class="switch-track" aria-hidden="true"><span></span></span>
+            <span class="sr-only">开启或关闭词性转换词书</span>
+          </label>
+        </div>
+
+        <div class="split-fields" id="formationOptions">
+          <fieldset class="form-group">
+            <legend class="group-label">分组方式</legend>
+            <div class="segmented-control">
+              <label>
+                <input type="radio" name="formation_group" value="deck" {% if not preferences or preferences.formation_group == 'deck' %}checked{% endif %}>
+                <span>牌组层级</span>
+              </label>
+              <label>
+                <input type="radio" name="formation_group" value="pos" {% if preferences and preferences.formation_group == 'pos' %}checked{% endif %}>
+                <span>词性大类</span>
+              </label>
+              <label>
+                <input type="radio" name="formation_group" value="affix" {% if preferences and preferences.formation_group == 'affix' %}checked{% endif %}>
+                <span>后缀</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-group">
+            <legend class="group-label">内容筛选</legend>
+            <div class="segmented-control">
+              <label>
+                <input type="radio" name="formation_filter" value="all" {% if not preferences or preferences.formation_filter == 'all' %}checked{% endif %}>
+                <span>全部</span>
+              </label>
+              <label>
+                <input type="radio" name="formation_filter" value="regular" {% if preferences and preferences.formation_filter == 'regular' %}checked{% endif %}>
+                <span>仅常规</span>
+              </label>
+              <label>
+                <input type="radio" name="formation_filter" value="special" {% if preferences and preferences.formation_filter == 'special' %}checked{% endif %}>
+                <span>仅特例</span>
+              </label>
+            </div>
+          </fieldset>
+        </div>
+        <p class="field-hint" id="formationHint">只有单一子牌组（只分常规或只分特例）的支会直接并到上级，例如「代词」不再拆成多个小组。</p>
+      </section>
+      {% endif %}
+
+      <section class="setting-card" id="displaySection" aria-labelledby="displaySectionTitle">
+        <header class="setting-card__head">
+          <span class="section-number">{{ '03' if authenticated and books|selectattr('kind', 'equalto', 'cards')|list else '02' }}</span>
           <div>
             <h2 id="displaySectionTitle">闪示规则</h2>
             <p>决定每一面停留多久，以及单词以怎样的顺序出现。</p>
@@ -236,11 +323,21 @@
           <div class="range-scale" aria-hidden="true"><span>1s</span><span>15s</span><span>30s</span></div>
           <p class="field-hint" id="intervalHint">每一面停留设定时间后，自动翻开下一面。</p>
         </div>
+
+        <div class="range-field" id="fontField">
+          <div class="range-head">
+            <label class="field-label" for="fontRange">卡片字号</label>
+            <output class="range-output" for="fontRange"><strong id="fontOutput">{{ (preferences.font_scale * 100)|round|int if preferences else 100 }}</strong><span>%</span></output>
+          </div>
+          <input class="range-input" id="fontRange" name="font_scale" type="range" min="80" max="180" step="5" value="{{ (preferences.font_scale * 100)|round|int if preferences else 100 }}">
+          <div class="range-scale" aria-hidden="true"><span>小</span><span>标准</span><span>大</span></div>
+          <p class="field-hint">只调整卡片上的单词与释义，不影响页面其他文字；右侧预览会同步变化。</p>
+        </div>
       </section>
 
-      <section class="setting-card" aria-labelledby="audioSectionTitle">
+      <section class="setting-card" id="audioSection" aria-labelledby="audioSectionTitle">
         <header class="setting-card__head">
-          <span class="section-number">03</span>
+          <span class="section-number">{{ '04' if authenticated and books|selectattr('kind', 'equalto', 'cards')|list else '03' }}</span>
           <div>
             <h2 id="audioSectionTitle">声音与体验</h2>
             <p>英文显示与中文显示时，都会朗读当前单词。</p>
@@ -285,6 +382,42 @@
         </div>
       </section>
 
+      {% if authenticated %}
+      <section class="setting-card" id="cacheSection" aria-labelledby="cacheSectionTitle">
+        <header class="setting-card__head">
+          <span class="section-number">{{ '05' if books|selectattr('kind', 'equalto', 'cards')|list else '04' }}</span>
+          <div>
+            <h2 id="cacheSectionTitle">发音缓存</h2>
+            <p>控制后台预缓存的下载节奏和磁盘上限，保存后立即生效。</p>
+          </div>
+        </header>
+
+        <div class="range-field" id="cacheIntervalField">
+          <div class="range-head">
+            <label class="field-label" for="cacheIntervalRange">预缓存间隔</label>
+            <output class="range-output" for="cacheIntervalRange"><strong id="cacheIntervalOutput">{{ '%g'|format(preferences.cache_interval_seconds if preferences else 1) }}</strong><span>秒 / 个</span></output>
+          </div>
+          <input class="range-input" id="cacheIntervalRange" name="cache_interval_seconds" type="range" min="0.2" max="5" step="0.1" value="{{ preferences.cache_interval_seconds if preferences else 1 }}">
+          <div class="range-scale" aria-hidden="true"><span>0.2s</span><span>2.5s</span><span>5s</span></div>
+          <p class="field-hint">预缓存队列里每下载一个发音休息多久，默认每秒一个，避免请求过于密集。</p>
+        </div>
+
+        <div class="number-field">
+          <div class="range-head">
+            <label class="field-label" for="cacheLimitInput">缓存上限</label>
+            <output class="range-output"><strong id="cacheLimitOutput">{{ preferences.cache_limit if preferences else 2000 }}</strong><span>个发音</span></output>
+          </div>
+          <input class="number-input" id="cacheLimitInput" name="cache_limit" type="number" min="100" max="20000" step="100"
+                 value="{{ preferences.cache_limit if preferences else 2000 }}" inputmode="numeric">
+          <div class="range-scale" aria-hidden="true"><span>100</span><span>20000</span></div>
+          <p class="field-hint" id="cacheStats">
+            达到上限后不再预缓存新单词，已经下载的发音照常可用。
+            {% if audio_cache %}当前已缓存 {{ audio_cache.cached }} 个发音。{% endif %}
+          </p>
+        </div>
+      </section>
+      {% endif %}
+
       <section class="danger-card" aria-labelledby="resetSectionTitle">
         <div>
           <h2 id="resetSectionTitle">恢复默认设置</h2>
@@ -297,6 +430,11 @@
       </section>
 
       <p class="form-footnote"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>{% if authenticated %}更改会自动保存到服务器，对所有访问者生效；设置页密码与服务器密钥不会被写入浏览器存储。{% else %}更改会自动保存在本机浏览器（localStorage），不会上传服务器，也不会影响其他人。{% endif %}</p>
+      <p class="wizard-reopen">
+        <button class="text-button" id="wizardReopen" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#icon-spark"></use></svg>重新打开使用向导
+        </button>
+      </p>
     </form>
 
     <aside class="settings-aside" aria-label="设置预览">
@@ -357,6 +495,33 @@
     <div class="confirm-dialog__actions">
       <button class="outline-button" id="cancelReset" type="button">取消</button>
       <button class="danger-button" id="confirmReset" type="button">恢复默认</button>
+    </div>
+  </dialog>
+
+  <dialog class="wizard" id="wizard" aria-labelledby="wizardTitle" aria-describedby="wizardBody">
+    <div class="wizard__top">
+      <span class="wizard__kicker">FIRST RUN</span>
+      <button class="wizard__skip" id="wizardSkip" type="button">跳过</button>
+    </div>
+    <h2 class="wizard__title" id="wizardTitle">三步开始闪词</h2>
+    <p class="wizard__body" id="wizardBody">先确认学习范围，再定节奏和声音，之后随时可以在这一页修改。</p>
+    <ol class="wizard__steps" id="wizardSteps">
+      <li data-target="bookSection"><span class="wizard__num">1</span><span>选择词书与单元</span></li>
+      <li data-target="displaySection"><span class="wizard__num">2</span><span>设定闪示节奏</span></li>
+      <li data-target="audioSection"><span class="wizard__num">3</span><span>确认声音</span></li>
+    </ol>
+    <p class="wizard__note" id="wizardNote"></p>
+    <div class="wizard__actions">
+      <button class="text-button" id="wizardPull" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>从服务器拉取配置
+      </button>
+      <div class="wizard__nav">
+        <button class="outline-button" id="wizardBack" type="button">上一步</button>
+        <button class="primary-action" id="wizardNext" type="button">
+          <span class="primary-action__label">下一步</span>
+          <svg class="icon primary-action__icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
+        </button>
+      </div>
     </div>
   </dialog>
 </main>

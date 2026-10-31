@@ -90,6 +90,41 @@ class AudioStore:
         self._prefetch_queue: deque[str] = deque()
         self._prefetch_seen: set[str] = set()
         self._prefetch_thread: threading.Thread | None = None
+        # 运行期可调（管理员在设置页修改，1 个 worker 下即时生效）。
+        self._prefetch_interval = 1.0
+        self._cache_limit = 2000
+        self._cache_count: int | None = None
+
+    def set_runtime(
+        self,
+        *,
+        interval_seconds: float | None = None,
+        cache_limit: int | None = None,
+    ) -> None:
+        """更新预缓存节奏与上限（默认每秒 1 个、最多 2000 个）。"""
+        with self._prefetch_guard:
+            if interval_seconds is not None:
+                self._prefetch_interval = max(0.0, min(60.0, float(interval_seconds)))
+            if cache_limit is not None:
+                self._cache_limit = max(0, int(cache_limit))
+
+    def runtime(self) -> dict[str, float]:
+        with self._prefetch_guard:
+            return {
+                "intervalSeconds": round(self._prefetch_interval, 2),
+                "cacheLimit": self._cache_limit,
+                "cached": self._cached_count(),
+            }
+
+    def _cached_count(self) -> int:
+        if self._cache_count is None:
+            try:
+                self._cache_count = sum(
+                    1 for path in self.config.cache_dir.glob("*.mp3") if path.is_file()
+                )
+            except OSError:
+                self._cache_count = 0
+        return self._cache_count
 
     def get(self, word: str) -> AudioAsset:
         if not self.config.enabled:
@@ -117,10 +152,11 @@ class AudioStore:
                 raise
         return AudioAsset(cached)
 
-    def prefetch(self, words: Iterable[str], *, limit: int = 800) -> int:
+    def prefetch(self, words: Iterable[str], *, limit: int | None = None) -> int:
         """把选中范围内的发音排进后台队列，提前下载到本地缓存。
 
         只做尽力而为的预热：不阻塞请求、失败静默重试，且跳过仍然新鲜的缓存。
+        队列长度受 ``cache_limit``（默认 2000）约束，达到上限后不再入队。
         返回本次实际入队的单词数。
         """
         if not self.config.enabled or not self.config.prefetch:
@@ -129,8 +165,12 @@ class AudioStore:
         with self._prefetch_guard:
             if len(self._prefetch_seen) > 50000:
                 self._prefetch_seen.clear()
+            remaining = self._cache_limit - self._cached_count()
+            budget = remaining if limit is None else min(remaining, limit)
+            if budget <= 0:
+                return 0
             for word in words:
-                if queued >= limit:
+                if queued >= budget:
                     break
                 canonical = self.manager.canonical_audio_word(word)
                 if not canonical or canonical in self._prefetch_seen:
@@ -160,14 +200,23 @@ class AudioStore:
                 if not self._prefetch_queue:
                     self._prefetch_thread = None
                     return
+                if self._cached_count() >= self._cache_limit:
+                    logger.info(
+                        "音频缓存已达上限 %s，停止预缓存", self._cache_limit
+                    )
+                    self._prefetch_queue.clear()
+                    self._prefetch_thread = None
+                    return
                 word = self._prefetch_queue.popleft()
+                interval = self._prefetch_interval
             try:
                 self.get(word)
             except Exception as exc:  # noqa: BLE001 - 预热失败不应影响服务
                 with self._prefetch_guard:
                     self._prefetch_seen.discard(word)
                 logger.debug("音频预缓存失败 %s：%s", word, exc)
-            time.sleep(0.15)
+            if interval > 0:
+                time.sleep(interval)
 
     def cache_path(self, word: str) -> Path | None:
         canonical = self.manager.canonical_audio_word(word)
@@ -264,6 +313,7 @@ class AudioStore:
         return b"".join(chunks)
 
     def _write_cache(self, destination: Path, payload: bytes) -> None:
+        existed = destination.is_file()
         try:
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             with tempfile.NamedTemporaryFile(
@@ -287,3 +337,7 @@ class AudioStore:
                 pass
             logger.warning("写入发音缓存失败：%s", exc)
             raise AudioError("服务器无法缓存发音文件") from exc
+        if not existed:
+            with self._prefetch_guard:
+                if self._cache_count is not None:
+                    self._cache_count += 1

@@ -14,6 +14,7 @@ import base64
 import gzip
 import json
 import re
+import sys
 import tomllib
 from pathlib import Path
 
@@ -21,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "src" / "littleflash" / "static"
 STANDALONE = ROOT / "standalone"
 DIST = ROOT / "dist"
+
+sys.path.insert(0, str(ROOT / "src"))
+from littleflash.wordbooks import WordbookManager  # noqa: E402
 
 
 def project_version() -> str:
@@ -33,35 +37,42 @@ VERSION = project_version()
 
 
 def load_data() -> dict:
+    """用后端的词书解析逻辑，保证单文件版和线上版分组一致。"""
+    manager = WordbookManager(ROOT / "src" / "wordbooks")
     books = []
-    for path in sorted((ROOT / "src" / "wordbooks").glob("*.json")):
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        book = {
-            "i": raw.get("id") or path.stem,
-            "t": raw.get("title") or path.stem,
-            "u": [],
-        }
-        if raw.get("stage"):
-            book["s"] = raw["stage"]
-        if raw.get("edition"):
-            book["e"] = raw["edition"]
-        for unit in raw.get("units", []):
-            entry = {
-                "i": unit.get("id") or "unit",
-                "t": unit.get("title") or "未命名单元",
-                "w": [],
-            }
-            for word in unit.get("words", []):
-                en = str(word.get("en") or "").strip()
-                if not en:
-                    continue
-                entry["w"].append(
-                    [en, str(word.get("zh") or ""), str(word.get("phonetic") or "")]
-                )
-            if entry["w"]:
-                book["u"].append(entry)
-        if book["u"]:
-            books.append(book)
+    for book in manager.books():
+        entry = {"i": book.id, "t": book.title, "u": []}
+        if book.stage:
+            entry["s"] = book.stage
+        if book.edition:
+            entry["e"] = book.edition
+        if book.is_card_book:
+            entry["k"] = "cards"
+        for unit in book.units:
+            unit_entry = {"i": unit.id, "t": unit.title, "w": []}
+            if unit.group:
+                unit_entry["g"] = unit.group
+                unit_entry["l"] = unit.label
+                unit_entry["y"] = unit.type
+            for word in unit.words:
+                if word.is_card:
+                    unit_entry["w"].append(
+                        [
+                            word.en,
+                            word.zh,
+                            "",
+                            word.front,
+                            word.back,
+                            word.note,
+                            word.answer,
+                        ]
+                    )
+                else:
+                    unit_entry["w"].append([word.en, word.zh, word.phonetic])
+            if unit_entry["w"]:
+                entry["u"].append(unit_entry)
+        if entry["u"]:
+            books.append(entry)
     return {"v": VERSION, "books": books}
 
 
@@ -100,7 +111,7 @@ def build() -> Path:
 
     DIST.mkdir(parents=True, exist_ok=True)
     output = DIST / f"littleflash-{VERSION}-standalone.html"
-    output.write_text(html, encoding="utf-8")
+    output.write_bytes(html.encode("utf-8"))
 
     raw = output.stat().st_size
     gz = len(gzip.compress(html.encode("utf-8"), 9))

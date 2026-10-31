@@ -5,10 +5,10 @@ password-protected settings page, while the YAML file remains the place for
 server/deployment secrets.  Writes are atomic and file-locked so multiple
 gunicorn workers cannot corrupt the JSON state.
 
-0.1.3 起支持：
-- ``selections``：同时选择多本词书、每本书的多个单元；
-- ``seed``：随机顺序的种子（中英文/数字字符串），相同种子顺序稳定；
-- ``audio_prefetch``：是否在后台预拉取并缓存发音（管理员可配）。
+0.1.4 起支持：
+- ``formation_*``：卡片书（词性转换）是否显示、按什么维度分组、是否只看常规/特例；
+- ``cache_interval_seconds`` / ``cache_limit``：后台发音预缓存的节奏与上限；
+- 其余仍是 0.1.3 的 ``selections`` / ``seed`` / ``audio_prefetch``。
 """
 
 from __future__ import annotations
@@ -23,7 +23,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from .wordbooks import Unit, Wordbook, WordbookManager
+from .wordbooks import (
+    FORMATION_FILTERS,
+    FORMATION_GROUPS,
+    Unit,
+    Wordbook,
+    WordbookManager,
+)
 
 try:
     import fcntl
@@ -39,6 +45,17 @@ ORDERS = ("sequence", "random")
 MODES = ("auto", "manual")
 MIN_INTERVAL = 1.0
 MAX_INTERVAL = 30.0
+
+MIN_FONT_SCALE = 0.8
+MAX_FONT_SCALE = 1.8
+DEFAULT_FONT_SCALE = 1.0
+
+MIN_CACHE_INTERVAL = 0.2
+MAX_CACHE_INTERVAL = 10.0
+DEFAULT_CACHE_INTERVAL = 1.0
+MIN_CACHE_LIMIT = 100
+MAX_CACHE_LIMIT = 20000
+DEFAULT_CACHE_LIMIT = 2000
 
 MAX_SEED_LENGTH = 64
 DEFAULT_SEED_LENGTH = 8
@@ -224,6 +241,12 @@ def default_preferences(
         "audio_enabled": True,
         "audio_volume": 0.8,
         "audio_prefetch": True,
+        "font_scale": DEFAULT_FONT_SCALE,
+        "formation_enabled": True,
+        "formation_group": "deck",
+        "formation_filter": "all",
+        "cache_interval_seconds": DEFAULT_CACHE_INTERVAL,
+        "cache_limit": DEFAULT_CACHE_LIMIT,
     }
 
 
@@ -269,6 +292,33 @@ def public_preferences(
     volume = _safe_float(raw.get("audio_volume"), defaults["audio_volume"])
     volume = min(1.0, max(0.0, round(volume, 2)))
 
+    font_scale = _safe_float(raw.get("font_scale"), defaults["font_scale"])
+    font_scale = round(min(MAX_FONT_SCALE, max(MIN_FONT_SCALE, font_scale)), 2)
+
+    formation_enabled = raw.get("formation_enabled")
+    if not isinstance(formation_enabled, bool):
+        formation_enabled = defaults["formation_enabled"]
+
+    formation_group = raw.get("formation_group")
+    if formation_group not in FORMATION_GROUPS:
+        formation_group = defaults["formation_group"]
+
+    formation_filter = raw.get("formation_filter")
+    if formation_filter not in FORMATION_FILTERS:
+        formation_filter = defaults["formation_filter"]
+
+    cache_interval = _safe_float(
+        raw.get("cache_interval_seconds"), defaults["cache_interval_seconds"]
+    )
+    cache_interval = round(
+        min(MAX_CACHE_INTERVAL, max(MIN_CACHE_INTERVAL, cache_interval)), 1
+    )
+
+    cache_limit = raw.get("cache_limit")
+    if isinstance(cache_limit, bool) or not isinstance(cache_limit, int):
+        cache_limit = defaults["cache_limit"]
+    cache_limit = int(min(MAX_CACHE_LIMIT, max(MIN_CACHE_LIMIT, cache_limit)))
+
     first = selections[0] if selections else {"wordbook_id": "", "unit_ids": ["all"]}
     first_unit = "all" if "all" in first["unit_ids"] else first["unit_ids"][0]
 
@@ -284,6 +334,12 @@ def public_preferences(
         "audio_enabled": audio_enabled,
         "audio_volume": volume,
         "audio_prefetch": audio_prefetch,
+        "font_scale": font_scale,
+        "formation_enabled": formation_enabled,
+        "formation_group": formation_group,
+        "formation_filter": formation_filter,
+        "cache_interval_seconds": cache_interval,
+        "cache_limit": cache_limit,
     }
 
 
@@ -364,6 +420,55 @@ def validate_update(
         if not isinstance(patch["audio_prefetch"], bool):
             raise SettingsValidationError("发音预缓存开关的值无效")
         merged["audio_prefetch"] = patch["audio_prefetch"]
+
+    if "font_scale" in patch:
+        value = patch["font_scale"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SettingsValidationError("字号必须是数字")
+        value = float(value)
+        if not MIN_FONT_SCALE <= value <= MAX_FONT_SCALE:
+            raise SettingsValidationError(
+                f"字号必须在 {MIN_FONT_SCALE:g} 到 {MAX_FONT_SCALE:g} 之间"
+            )
+        merged["font_scale"] = round(value, 2)
+
+    if "formation_enabled" in patch:
+        if not isinstance(patch["formation_enabled"], bool):
+            raise SettingsValidationError("词性转换显示开关的值无效")
+        merged["formation_enabled"] = patch["formation_enabled"]
+
+    if "formation_group" in patch:
+        value = patch["formation_group"]
+        if value not in FORMATION_GROUPS:
+            raise SettingsValidationError("词性转换的分组方式无效")
+        merged["formation_group"] = value
+
+    if "formation_filter" in patch:
+        value = patch["formation_filter"]
+        if value not in FORMATION_FILTERS:
+            raise SettingsValidationError("词性转换的内容筛选无效")
+        merged["formation_filter"] = value
+
+    if "cache_interval_seconds" in patch:
+        value = patch["cache_interval_seconds"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SettingsValidationError("缓存间隔必须是数字")
+        value = float(value)
+        if not MIN_CACHE_INTERVAL <= value <= MAX_CACHE_INTERVAL:
+            raise SettingsValidationError(
+                f"缓存间隔必须在 {MIN_CACHE_INTERVAL:g} 到 {MAX_CACHE_INTERVAL:g} 秒之间"
+            )
+        merged["cache_interval_seconds"] = round(value, 1)
+
+    if "cache_limit" in patch:
+        value = patch["cache_limit"]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise SettingsValidationError("缓存上限必须是整数")
+        if not MIN_CACHE_LIMIT <= value <= MAX_CACHE_LIMIT:
+            raise SettingsValidationError(
+                f"缓存上限必须在 {MIN_CACHE_LIMIT} 到 {MAX_CACHE_LIMIT} 个之间"
+            )
+        merged["cache_limit"] = value
 
     return public_preferences(merged, manager)
 
@@ -485,13 +590,19 @@ def sample_word(
     for book, unit in selection_units(manager, selections):
         if unit.words:
             word = unit.words[0]
-            return {
+            sample = {
                 "en": word.en,
                 "zh": word.zh,
                 "phonetic": word.phonetic,
                 "bookTitle": book.title,
                 "unitTitle": unit.title,
             }
+            if word.is_card:
+                sample["kind"] = "cards"
+                sample["front"] = word.front
+                sample["back"] = word.back
+                sample["note"] = word.note
+            return sample
     return None
 
 

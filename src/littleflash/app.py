@@ -125,6 +125,28 @@ def create_app(config_path: str | None = None) -> Flask:
     services = Services(config, wordbooks, preferences, audio, limiter)
     app.extensions["littleflash"] = services
 
+    def formation_settings(prefs: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "enabled": prefs.get("formation_enabled", True),
+            "group": prefs.get("formation_group", "deck"),
+            "filter": prefs.get("formation_filter", "all"),
+        }
+
+    def sync_formation(prefs: dict[str, Any]) -> None:
+        """把管理员的「词性转换」显示设置同步给词书管理器。"""
+        if wordbooks.set_formation_view(formation_settings(prefs)):
+            logger.info("词性转换展示方式已更新：%s", wordbooks.formation_view())
+
+    def apply_audio_runtime(prefs: dict[str, Any]) -> None:
+        audio.set_runtime(
+            interval_seconds=prefs.get("cache_interval_seconds", 1.0),
+            cache_limit=prefs.get("cache_limit", 2000),
+        )
+
+    startup_prefs = preferences.load(wordbooks)
+    sync_formation(startup_prefs)
+    apply_audio_runtime(startup_prefs)
+
     asset_version = _asset_version(app)
     configured_books = wordbooks.books()
     logger.info(
@@ -262,20 +284,26 @@ def create_app(config_path: str | None = None) -> Flask:
             items.append({"wordbook_id": book_id, "unit_ids": unit_ids})
         return items
 
-    def deck_items(selections: list[dict[str, Any]]) -> list[dict[str, str]]:
-        items: list[dict[str, str]] = []
+    def deck_items(selections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
         for book, unit, word in iter_selected_words(wordbooks, selections):
-            items.append(
-                {
-                    "en": word.en,
-                    "zh": word.zh,
-                    "phonetic": word.phonetic,
-                    "bookId": book.id,
-                    "bookTitle": book.title,
-                    "unitId": unit.id,
-                    "unitTitle": unit.title,
-                }
-            )
+            item: dict[str, Any] = {
+                "en": word.en,
+                "zh": word.zh,
+                "phonetic": word.phonetic,
+                "bookId": book.id,
+                "bookTitle": book.title,
+                "unitId": unit.id,
+                "unitTitle": unit.title,
+            }
+            if word.is_card:
+                item["kind"] = "cards"
+                item["front"] = word.front
+                item["back"] = word.back
+                item["answer"] = word.audio_answer
+                if word.note:
+                    item["note"] = word.note
+            items.append(item)
         return items
 
     def selection_query(selections: list[dict[str, Any]]) -> str:
@@ -300,10 +328,11 @@ def create_app(config_path: str | None = None) -> Flask:
     def settings_page() -> str:
         authenticated = is_authenticated()
         csrf_token = ensure_csrf_token()
-        books = wordbooks.metadata_list()
         # 设置页对所有访客开放：未登录时表单读写浏览器本地存储，不会回写服务器；
         # 因此这里下发的只是与 /api/bootstrap 相同的公开默认值。
         prefs = preferences.load(wordbooks)
+        sync_formation(prefs)
+        books = wordbooks.metadata_list()
         preview = sample_word(prefs, wordbooks)
         selection_map = {
             selection["wordbook_id"]: selection["unit_ids"]
@@ -320,6 +349,7 @@ def create_app(config_path: str | None = None) -> Flask:
                 preferences=prefs,
                 selection_map=selection_map,
                 preview=preview,
+                audio_cache=audio.runtime() if authenticated else None,
             ),
         )
 
@@ -327,10 +357,12 @@ def create_app(config_path: str | None = None) -> Flask:
     @app.get("/api/bootstrap")
     def api_bootstrap() -> Response:
         prefs = preferences.load(wordbooks)
+        sync_formation(prefs)
+        authenticated = is_authenticated()
         return jsonify(
             ok=True,
             # 未登录的访客会用浏览器本地设置覆盖下面的公开默认值。
-            authenticated=is_authenticated(),
+            authenticated=authenticated,
             books=wordbooks.metadata_list(),
             preferences=prefs,
             selectionQuery=selection_query(prefs["selections"]),
@@ -338,6 +370,8 @@ def create_app(config_path: str | None = None) -> Flask:
             server={
                 "audioEnabled": config.audio.enabled,
                 "version": __version__,
+                "formation": wordbooks.formation_view(),
+                "audioCache": audio.runtime() if authenticated else None,
             },
         )
 
@@ -347,6 +381,7 @@ def create_app(config_path: str | None = None) -> Flask:
 
     @app.get("/api/wordbooks/<book_id>")
     def api_wordbook(book_id: str) -> Response:
+        sync_formation(preferences.load(wordbooks))
         book = wordbooks.get(book_id)
         if book is None:
             raise ApiError("词书不存在或已被移除", 404, code="book_not_found")
@@ -364,6 +399,7 @@ def create_app(config_path: str | None = None) -> Flask:
     def api_deck() -> Response:
         """返回当前选择范围内的扁平单词列表，供首页一次加载。"""
         prefs = preferences.load(wordbooks)
+        sync_formation(prefs)
         raw = request.args.get("s")
         if raw:
             selections = normalize_selections(
@@ -417,6 +453,7 @@ def create_app(config_path: str | None = None) -> Flask:
             limit = 24
         limit = max(1, min(PREVIEW_LIMIT_MAX, limit))
 
+        sync_formation(preferences.load(wordbooks))
         book = wordbooks.get(book_id) if book_id else wordbooks.first_book()
         if book is None:
             return jsonify(ok=True, word=None, words=[])
@@ -426,18 +463,24 @@ def create_app(config_path: str | None = None) -> Flask:
             unit = book.get_unit(unit_id)
             units = (unit,) if unit is not None else book.units
 
-        words: list[dict[str, str]] = []
+        words: list[dict[str, Any]] = []
         for unit in units:
             for word in unit.words:
-                words.append(
-                    {
-                        "en": word.en,
-                        "zh": word.zh,
-                        "phonetic": word.phonetic,
-                        "bookTitle": book.title,
-                        "unitTitle": unit.title,
-                    }
-                )
+                item: dict[str, Any] = {
+                    "en": word.en,
+                    "zh": word.zh,
+                    "phonetic": word.phonetic,
+                    "bookTitle": book.title,
+                    "unitTitle": unit.title,
+                }
+                if word.is_card:
+                    item["kind"] = "cards"
+                    item["front"] = word.front
+                    item["back"] = word.back
+                    item["answer"] = word.audio_answer
+                    if word.note:
+                        item["note"] = word.note
+                words.append(item)
                 if len(words) >= limit:
                     break
             if len(words) >= limit:
@@ -449,10 +492,32 @@ def create_app(config_path: str | None = None) -> Flask:
     @protected_write
     def api_update_settings() -> Response:
         payload = read_json_body()
+        # 「词性转换」的展示方式会改变词书结构，先应用再校验选择，
+        # 否则同一请求里既改展示方式又改选择会互相打架。
+        if any(
+            key in payload
+            for key in ("formation_enabled", "formation_group", "formation_filter")
+        ):
+            current = preferences.load(wordbooks)
+            sync_formation(
+                {
+                    "formation_enabled": payload.get(
+                        "formation_enabled", current["formation_enabled"]
+                    ),
+                    "formation_group": payload.get(
+                        "formation_group", current["formation_group"]
+                    ),
+                    "formation_filter": payload.get(
+                        "formation_filter", current["formation_filter"]
+                    ),
+                }
+            )
         try:
             updated = preferences.update(payload, wordbooks)
         except SettingsValidationError as exc:
             raise ApiError(str(exc), 400, code="invalid_settings") from exc
+        sync_formation(updated)
+        apply_audio_runtime(updated)
         if updated["audio_enabled"] and updated["audio_prefetch"]:
             audio.prefetch(
                 [
@@ -471,6 +536,8 @@ def create_app(config_path: str | None = None) -> Flask:
             defaults = preferences.reset(wordbooks)
         except SettingsValidationError as exc:
             raise ApiError(str(exc), 400, code="invalid_settings") from exc
+        sync_formation(defaults)
+        apply_audio_runtime(defaults)
         return jsonify(ok=True, preferences=defaults, reset=True)
 
     @app.post("/api/auth/login")

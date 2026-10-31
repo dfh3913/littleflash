@@ -73,6 +73,11 @@
       <div class="study-context">
         <div class="context-chip"><svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg><span id="unitLabel">正在加载学习范围</span></div>
         <div class="study-context__right">
+          <form class="jump-form" id="jumpForm" autocomplete="off" novalidate>
+            <label class="sr-only" for="jumpInput">跳到第几个单词</label>
+            <input class="jump-input" id="jumpInput" type="number" min="1" step="1" inputmode="numeric" placeholder="第N词">
+            <button class="jump-button" id="jumpBtn" type="submit" title="跳转到指定位置（G）">跳转</button>
+          </form>
           <span class="round-badge" id="roundBadge">第 1 轮</span>
           <span class="pace-chip" id="paceChip"><span class="pace-chip__dot" aria-hidden="true"></span><span id="paceText">自动 · 4 秒</span></span>
         </div>
@@ -101,6 +106,11 @@
             <div class="card-content" id="cardContent">
               <div class="word-block" id="wordBlock"><h2 class="word" id="wordText"></h2><p class="phonetic" id="phoneticText"></p></div>
               <div class="meaning-block" id="meaningBlock" hidden><span class="meaning-quote" aria-hidden="true">“</span><p class="meaning" id="meaningText"></p></div>
+              <div class="card-lines" id="cardLines" hidden>
+                <p class="card-lines__head"><span class="card-lines__word" id="cardLinesWord"></span><span class="card-lines__pos" id="cardLinesPos"></span></p>
+                <p class="card-lines__extra" id="cardLinesExtra"></p>
+                <p class="card-lines__note" id="cardLinesNote" hidden></p>
+              </div>
             </div>
             <footer class="card-foot"><span class="card-tip" id="cardTip"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg><span id="cardTipText">点击翻面</span></span></footer>
           </div>
@@ -135,6 +145,15 @@
         <button class="standalone-panel__close" id="closeSettings" type="button" aria-label="关闭设置">×</button>
       </header>
       <div class="standalone-panel__body">
+        <div class="standalone-intro" id="standaloneIntro" hidden>
+          <strong>三步开始闪词</strong>
+          <ol>
+            <li>勾选词书，再点选单元</li>
+            <li>选好方向、顺序和节奏</li>
+            <li>打开声音，点「开始学习」</li>
+          </ol>
+          <button class="standalone-small-button" id="stIntroDone" type="button">开始学习</button>
+        </div>
         <div class="standalone-summary" id="settingsSummary"></div>
         <div class="standalone-field">
           <span class="standalone-field__label">词书与单元</span>
@@ -166,6 +185,10 @@
         <div class="standalone-field">
           <label for="stVolume">音量</label>
           <input id="stVolume" type="range" min="0" max="100" step="5">
+        </div>
+        <div class="standalone-field">
+          <label for="stFont">卡片字号：<span id="stFontValue">100</span>%</label>
+          <input id="stFont" type="range" min="80" max="180" step="5">
         </div>
         <button class="standalone-small-button" id="stReset" type="button">恢复默认设置</button>
       </div>

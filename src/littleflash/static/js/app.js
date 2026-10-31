@@ -40,6 +40,14 @@
     phoneticText: $("phoneticText"),
     meaningBlock: $("meaningBlock"),
     meaningText: $("meaningText"),
+    cardLines: $("cardLines"),
+    cardLinesWord: $("cardLinesWord"),
+    cardLinesPos: $("cardLinesPos"),
+    cardLinesExtra: $("cardLinesExtra"),
+    cardLinesNote: $("cardLinesNote"),
+    jumpForm: $("jumpForm"),
+    jumpInput: $("jumpInput"),
+    jumpBtn: $("jumpBtn"),
     cardTipText: $("cardTipText"),
     cardWordProgress: $("cardWordProgress"),
     prevBtn: $("prevBtn"),
@@ -92,6 +100,11 @@
 
   /* ------------------------------------------------------------------ boot */
   function init() {
+    // 初次使用先去设置页走一遍向导，配置完再回来。
+    if (LF.wizard.needs()) {
+      window.location.replace(LF.url("/settings?wizard=1"));
+      return;
+    }
     bindEvents();
     bindAudio();
     installAudioUnlock();
@@ -171,6 +184,7 @@
       state.face = 0;
       state.round = 1;
       state.ready = true;
+      const resumed = restoreProgress();
 
       setupPage();
       dom.cardState.hidden = true;
@@ -185,6 +199,13 @@
         state.book.id === "__multi__"
           ? "闪词 · 多本词书"
           : "闪词 · " + state.book.title;
+
+      if (resumed > 0) {
+        LF.toast("已从第 " + (resumed + 1) + " 个单词继续", {
+          type: "success",
+          duration: 2400,
+        });
+      }
 
       scheduleAuto();
       window.setTimeout(function () {
@@ -210,6 +231,7 @@
     state.intervalSeconds = clampNumber(prefs.interval_seconds, 1, 30, 4);
     state.kindOrder = prefs.front === "zh" ? ["zh", "en"] : ["en", "zh"];
     state.autoRunning = state.mode === "auto";
+    LF.applyFontScale(prefs.font_scale);
   }
 
   function summarizeSelection(selections, books) {
@@ -242,6 +264,11 @@
         en: word.en,
         zh: typeof word.zh === "string" ? word.zh : "",
         phonetic: typeof word.phonetic === "string" ? word.phonetic : "",
+        kind: word.kind === "cards" ? "cards" : "word",
+        front: typeof word.front === "string" ? word.front : "",
+        back: typeof word.back === "string" ? word.back : "",
+        answer: typeof word.answer === "string" ? word.answer : "",
+        note: typeof word.note === "string" ? word.note : "",
         bookId: typeof word.bookId === "string" ? word.bookId : "",
         bookTitle: typeof word.bookTitle === "string" ? word.bookTitle : "",
         unitId: typeof word.unitId === "string" ? word.unitId : "",
@@ -250,9 +277,18 @@
     });
     state.deck = deck;
     state.index = 0;
+    state.face = 0;
+    state.round = 1;
     if (state.order === "random") {
       LF.shuffleWithSeed(state.deck, roundSeed(1));
     }
+  }
+
+  /* 卡片书：正反面来自 Anki 牌组，不跟随「先英后中 / 先中后英」的闪示规则。 */
+  function isCardWord(word) {
+    return Boolean(
+      word && word.kind === "cards" && word.front && word.back
+    );
   }
 
   function roundSeed(round) {
@@ -285,44 +321,51 @@
     const word = currentWord();
     if (!word) return;
 
-    const kind = state.kindOrder[state.face];
-    dom.flashcard.dataset.face = kind;
-    dom.cardWatermark.textContent = kind === "zh" ? "中" : "Aa";
-
-    if (kind === "zh") {
-      dom.wordBlock.hidden = true;
-      dom.meaningBlock.hidden = false;
-      dom.faceLabelText.textContent = "中文释义";
-      dom.meaningText.textContent = word.zh || "暂无释义";
-      setTextSize(dom.meaningText, word.zh.length, 32, 80);
-      dom.cardTipText.textContent =
-        state.face === 0 ? "显示英文" : "下一个";
-      dom.flashcard.setAttribute(
-        "aria-label",
-        "中文释义：" +
-          (word.zh || "暂无释义") +
-          "。按空格或轻触卡片" +
-          (state.face === 0 ? "显示英文" : "进入下一个单词")
-      );
+    if (isCardWord(word)) {
+      renderCardLines(word);
     } else {
-      dom.wordBlock.hidden = false;
-      dom.meaningBlock.hidden = true;
-      dom.faceLabelText.textContent = "ENGLISH";
-      dom.wordText.textContent = word.en;
-      setTextSize(dom.wordText, word.en.length, 11, 19);
-      const phonetic = (word.phonetic || "").trim();
-      dom.phoneticText.textContent = phonetic;
-      dom.phoneticText.hidden = !phonetic;
-      dom.cardTipText.textContent =
-        state.face === 0 ? "点击翻面" : "下一个";
-      dom.flashcard.setAttribute(
-        "aria-label",
-        "英文单词 " +
-          word.en +
-          (phonetic ? "，音标 " + phonetic : "") +
-          "。按空格或轻触卡片" +
-          (state.face === 0 ? "查看中文释义" : "进入下一个单词")
-      );
+      const kind = state.kindOrder[state.face];
+      delete dom.flashcard.dataset.kind;
+      dom.flashcard.dataset.face = kind;
+      dom.cardWatermark.textContent = kind === "zh" ? "中" : "Aa";
+
+      if (kind === "zh") {
+        dom.wordBlock.hidden = true;
+        dom.meaningBlock.hidden = false;
+        dom.cardLines.hidden = true;
+        dom.faceLabelText.textContent = "中文释义";
+        dom.meaningText.textContent = word.zh || "暂无释义";
+        setTextSize(dom.meaningText, word.zh.length, 32, 80);
+        dom.cardTipText.textContent =
+          state.face === 0 ? "显示英文" : "下一个";
+        dom.flashcard.setAttribute(
+          "aria-label",
+          "中文释义：" +
+            (word.zh || "暂无释义") +
+            "。按空格或轻触卡片" +
+            (state.face === 0 ? "显示英文" : "进入下一个单词")
+        );
+      } else {
+        dom.wordBlock.hidden = false;
+        dom.meaningBlock.hidden = true;
+        dom.cardLines.hidden = true;
+        dom.faceLabelText.textContent = "ENGLISH";
+        dom.wordText.textContent = word.en;
+        setTextSize(dom.wordText, word.en.length, 11, 19);
+        const phonetic = (word.phonetic || "").trim();
+        dom.phoneticText.textContent = phonetic;
+        dom.phoneticText.hidden = !phonetic;
+        dom.cardTipText.textContent =
+          state.face === 0 ? "点击翻面" : "下一个";
+        dom.flashcard.setAttribute(
+          "aria-label",
+          "英文单词 " +
+            word.en +
+            (phonetic ? "，音标 " + phonetic : "") +
+            "。按空格或轻触卡片" +
+            (state.face === 0 ? "查看中文释义" : "进入下一个单词")
+        );
+      }
     }
 
     dom.unitLabel.textContent = word.unitTitle;
@@ -339,6 +382,40 @@
     }
   }
 
+  /* 卡片书固定「先正面、后背面」，与「先英后中 / 先中后英」无关。 */
+  function renderCardLines(word) {
+    const showingBack = state.face === 1;
+    const parts = LF.splitCardLine(showingBack ? word.back : word.front);
+
+    dom.flashcard.dataset.face = showingBack ? "zh" : "en";
+    dom.flashcard.dataset.kind = "cards";
+    dom.cardWatermark.textContent = showingBack ? "答" : "题";
+    dom.wordBlock.hidden = true;
+    dom.meaningBlock.hidden = true;
+    dom.cardLines.hidden = false;
+
+    dom.faceLabelText.textContent = showingBack ? "背面 · ANSWER" : "正面 · PROMPT";
+    dom.cardLinesWord.textContent = parts.word || word.en;
+    setTextSize(dom.cardLinesWord, (parts.word || "").length, 12, 22);
+    dom.cardLinesPos.textContent = parts.pos;
+    dom.cardLinesPos.hidden = !parts.pos;
+    dom.cardLinesExtra.textContent = parts.extra;
+    dom.cardLinesExtra.hidden = !parts.extra;
+    const note = showingBack ? (word.note || "").trim() : "";
+    dom.cardLinesNote.textContent = note;
+    dom.cardLinesNote.hidden = !note;
+
+    dom.cardTipText.textContent = showingBack ? "下一个" : "点击看答案";
+    dom.flashcard.setAttribute(
+      "aria-label",
+      (showingBack ? "背面：" : "正面：") +
+        (showingBack ? word.back : word.front).replace(/\n/g, "，") +
+        (note ? "。备注：" + note : "") +
+        "。按空格或轻触卡片" +
+        (showingBack ? "进入下一个单词" : "查看背面")
+    );
+  }
+
   function setTextSize(element, length, longThreshold, xlongThreshold) {
     if (!element) return;
     element.removeAttribute("data-length");
@@ -352,6 +429,13 @@
   function updateProgress() {
     const total = state.deck.length;
     dom.roundBadge.textContent = "第 " + state.round + " 轮";
+
+    if (dom.jumpInput) {
+      dom.jumpInput.max = total ? String(total) : "";
+      dom.jumpInput.placeholder = "第N词";
+      dom.jumpInput.title = total ? "跳转到 1–" + total + " 之间的任意位置（G）" : "跳转到指定位置";
+      dom.jumpInput.disabled = !total;
+    }
 
     if (!total) {
       dom.bookProgressText.textContent = "— / —";
@@ -369,6 +453,56 @@
     dom.bookProgressText.textContent = currentLabel + " / " + totalLabel;
     dom.bookProgress.style.width = percent + "%";
     dom.cardWordProgress.style.width = percent + "%";
+  }
+
+  /* ---------------------------------------------------------- 学习进度（本机）
+     同一套选择范围（+ 随机种子）下次打开时接着上次的位置。 */
+  function progressKey() {
+    if (!state.selectionQuery) return "";
+    const seed = state.order === "random" ? state.seed : "-";
+    return [state.selectionQuery, state.order, seed].join("|");
+  }
+
+  function saveProgress() {
+    if (!state.ready || !state.deck.length) return;
+    LF.progress.write(progressKey(), {
+      index: state.index,
+      round: state.round,
+    });
+  }
+
+  const saveProgressLater = LF.debounce(saveProgress, 400);
+
+  function restoreProgress() {
+    const saved = LF.progress.read(progressKey());
+    if (!saved) return 0;
+    if (saved.index <= 0 || saved.index >= state.deck.length) return 0;
+    state.index = saved.index;
+    state.round = saved.round;
+    return saved.index;
+  }
+
+  function jumpToWord(value) {
+    if (!state.ready || state.deck.length === 0) return;
+    const total = state.deck.length;
+    const number = Math.round(Number(value));
+    if (!isFinite(number) || number < 1) {
+      LF.toast("请输入 1 到 " + total + " 之间的序号", { type: "error" });
+      return;
+    }
+    const target = Math.min(total, number) - 1;
+    clearAutoTimer();
+    state.index = target;
+    state.face = 0;
+    renderFace(true);
+    updateProgress();
+    updatePlayerUI();
+    attemptPlayAudio();
+    scheduleAuto();
+    saveProgress();
+    if (dom.jumpInput) dom.jumpInput.value = "";
+    dom.flashcard.focus({ preventScroll: true });
+    LF.toast("已跳到第 " + (target + 1) + " 个单词", { duration: 1600 });
   }
 
   /* ---------------------------------------------------------------- actions */
@@ -412,6 +546,7 @@
     updatePlayerUI();
     attemptPlayAudio();
     scheduleAuto();
+    saveProgressLater();
   }
 
   function previousWord() {
@@ -425,6 +560,7 @@
     updatePlayerUI();
     attemptPlayAudio();
     scheduleAuto();
+    saveProgressLater();
   }
 
   function toggleAutoplay() {
@@ -500,13 +636,16 @@
 
     const word = currentWord();
     if (!word) return;
-    const url = LF.url("/api/audio?word=" + encodeURIComponent(word.en));
+    // 卡片书：正面读原词，背面读变形后的词。
+    const target =
+      isCardWord(word) && state.face === 1 && word.answer ? word.answer : word.en;
+    const url = LF.url("/api/audio?word=" + encodeURIComponent(target));
     const attemptId = ++state.audioAttempt;
 
     try {
-      if (state.currentAudioWord !== word.en) {
+      if (state.currentAudioWord !== target) {
         audio.src = url;
-        state.currentAudioWord = word.en;
+        state.currentAudioWord = target;
       } else {
         audio.pause();
         audio.currentTime = 0;
@@ -644,9 +783,11 @@
       LF.setHidden(dom.iconAdvance, false);
       dom.playLabel.textContent =
         state.face === 0
-          ? state.kindOrder[0] === "zh"
-            ? "显示英文"
-            : "翻开释义"
+          ? isCardWord(currentWord())
+            ? "看答案"
+            : state.kindOrder[0] === "zh"
+              ? "显示英文"
+              : "翻开释义"
           : "下一个单词";
     }
 
@@ -679,6 +820,7 @@
     dom.prevBtn.disabled = !enabled;
     dom.nextBtn.disabled = !enabled;
     dom.playBtn.disabled = !enabled;
+    if (dom.jumpInput) dom.jumpInput.disabled = !enabled;
     dom.flashcard.tabIndex = enabled ? 0 : -1;
     dom.flashcard.setAttribute("aria-busy", enabled ? "false" : "true");
     if (!enabled) {
@@ -826,6 +968,13 @@
       if (!state.loading) loadHomeData();
     });
 
+    if (dom.jumpForm) {
+      dom.jumpForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        jumpToWord(dom.jumpInput.value);
+      });
+    }
+
     document.addEventListener("keydown", handleKeydown);
 
     document.addEventListener("visibilitychange", function () {
@@ -841,6 +990,7 @@
     window.addEventListener("pagehide", function () {
       clearAutoTimer();
       audio.pause();
+      saveProgress();
     });
 
     window.addEventListener("pageshow", function (event) {
@@ -888,6 +1038,15 @@
       event.preventDefault();
       state.audioUnlocked = true;
       attemptPlayAudio({ force: true });
+      return;
+    }
+
+    if (event.code === "KeyG") {
+      event.preventDefault();
+      if (dom.jumpInput) {
+        dom.jumpInput.focus();
+        dom.jumpInput.select();
+      }
       return;
     }
 

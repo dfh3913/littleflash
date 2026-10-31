@@ -50,6 +50,11 @@
         <span id="unitLabel">正在加载学习范围</span>
       </div>
       <div class="study-context__right">
+        <form class="jump-form" id="jumpForm" autocomplete="off" novalidate>
+          <label class="sr-only" for="jumpInput">跳到第几个单词</label>
+          <input class="jump-input" id="jumpInput" type="number" min="1" step="1" inputmode="numeric" placeholder="第 N 词">
+          <button class="jump-button" id="jumpBtn" type="submit" title="跳转到指定位置（G）">跳转</button>
+        </form>
         <span class="round-badge" id="roundBadge">第 1 轮</span>
         <span class="pace-chip" id="paceChip">
           <span class="pace-chip__dot" aria-hidden="true"></span>
@@ -99,6 +104,14 @@
               <span class="meaning-quote" aria-hidden="true">“</span>
               <p class="meaning" id="meaningText"></p>
             </div>
+            <div class="card-lines" id="cardLines" hidden>
+              <p class="card-lines__head">
+                <span class="card-lines__word" id="cardLinesWord"></span>
+                <span class="card-lines__pos" id="cardLinesPos"></span>
+              </p>
+              <p class="card-lines__extra" id="cardLinesExtra"></p>
+              <p class="card-lines__note" id="cardLinesNote" hidden></p>
+            </div>
           </div>
 
           <footer class="card-foot">
@@ -113,7 +126,7 @@
       </article>
     </div>
 
-    <p class="sr-only" id="cardInstructions">闪卡会根据设置自动切换。按空格暂停或继续，按左右方向键切换单词，按 R 键重播发音。</p>
+    <p class="sr-only" id="cardInstructions">闪卡会根据设置自动切换。按空格暂停或继续，按左右方向键切换单词，按 G 跳到指定位置，按 R 键重播发音。</p>
 
     <div class="player">
       <div class="player__controls">
