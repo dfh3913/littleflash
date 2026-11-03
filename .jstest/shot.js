@@ -10,6 +10,7 @@ const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const URL_ = process.argv[2];
 const OUT = process.argv[3];
 const PREP = process.argv[4] || "";
+const PROBE = process.argv[5] || "";
 const PORT = Number(process.env.LF_CDP_PORT || 9341);
 const WIDTH = Number(process.env.LF_W || 1280);
 const HEIGHT = Number(process.env.LF_H || 900);
@@ -117,6 +118,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await send("Page.navigate", { url: URL_ }, sessionId);
   await loaded;
   await sleep(1600);
+
+  if (PROBE) {
+    const probe = await send(
+      "Runtime.evaluate",
+      { expression: PROBE, awaitPromise: true, returnByValue: true },
+      sessionId
+    );
+    console.log("PROBE " + JSON.stringify(probe.result && probe.result.result && probe.result.result.value));
+  }
 
   const shot = await send(
     "Page.captureScreenshot",

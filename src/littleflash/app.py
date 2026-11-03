@@ -39,10 +39,13 @@ from .preferences import (
     selection_units,
 )
 from .security import (
+    InputRejected,
     LoginRateLimiter,
     csrf_equal,
+    detect_threat,
     new_csrf_token,
     password_is_configured,
+    validate_password,
     verify_password,
 )
 from .wordbooks import WordbookManager
@@ -492,6 +495,10 @@ def create_app(config_path: str | None = None) -> Flask:
     @protected_write
     def api_update_settings() -> Response:
         payload = read_json_body()
+        threat = detect_threat(payload)
+        if threat:
+            logger.warning("设置请求包含可疑内容（%s）：来源 %s", threat, client_key())
+            raise ApiError("请求包含不被接受的字符", 400, code="suspicious_input")
         # 「词性转换」的展示方式会改变词书结构，先应用再校验选择，
         # 否则同一请求里既改展示方式又改选择会互相打架。
         if any(
@@ -544,13 +551,8 @@ def create_app(config_path: str | None = None) -> Flask:
     def api_login() -> Response:
         require_csrf()
         payload = read_json_body()
-        candidate = payload.get("password")
-        if not isinstance(candidate, str) or not candidate:
-            raise ApiError("请输入设置密码", 400, code="password_required")
-        if len(candidate) > 1024:
-            raise ApiError("密码过长", 400, code="invalid_password")
-
         key = client_key()
+
         retry_after = limiter.retry_after(key)
         if retry_after:
             raise ApiError(
@@ -559,6 +561,20 @@ def create_app(config_path: str | None = None) -> Flask:
                 code="rate_limited",
                 retry_after=retry_after,
             )
+
+        # 输入检查在限流之后、比对之前：可疑载荷直接拒绝并计入失败次数，
+        # 避免有人用注入串无限探测。日志只记特征名与来源，绝不记录密码本身。
+        raw_password = payload.get("password")
+        threat = detect_threat(raw_password) if isinstance(raw_password, str) else None
+        if threat:
+            limiter.record_failure(key)
+            logger.warning("登录请求包含可疑内容（%s）：来源 %s", threat, key)
+            raise ApiError("请求包含不被接受的字符", 400, code="suspicious_input")
+        try:
+            candidate = validate_password(raw_password)
+        except InputRejected as exc:
+            raise ApiError(exc.message, 400, code=exc.code) from exc
+
         if not password_is_configured(
             config.settings_password, config.settings_password_hash
         ):
