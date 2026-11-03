@@ -116,6 +116,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     return r.result.result.value;
   }
 
+  /* 真实鼠标点击（走 CDP Input），用来验证没被遮罩吃掉。 */
+  async function clickAt(x, y) {
+    const point = { x, y, button: "left", clickCount: 1 };
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", ...point }, sessionId);
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point }, sessionId);
+  }
+
   async function waitFor(expression, timeout) {
     const deadline = Date.now() + (timeout || 8000);
     while (Date.now() < deadline) {
@@ -148,6 +155,37 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       "选择词书"
     ) !== -1
   );
+  /* 0.1.6：向导改成非模态浮卡后，整页必须还能点 */
+  check(
+    "向导是非模态浮卡（没有遮罩）",
+    (await evaluate("document.getElementById('wizard').matches(':modal')")) === false
+  );
+  const bookBox = JSON.parse(
+    await evaluate(
+      "(function(){var b=document.querySelector('.book-pick__check');var r=b.getBoundingClientRect();" +
+        "return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2),checked:b.checked," +
+        "hit:(function(e){return e?(e.type||e.className||e.tagName):null})(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})})()"
+    )
+  );
+  check(
+    "向导不遮挡页面控件",
+    bookBox.hit === "checkbox",
+    "hit=" + bookBox.hit
+  );
+  await clickAt(bookBox.x, bookBox.y);
+  await sleep(400);
+  check(
+    "向导开着时真实点击能改设置",
+    (await evaluate("document.querySelector('.book-pick__check').checked")) !== bookBox.checked
+  );
+  check(
+    "改完立刻反映到向导提示",
+    (await evaluate("document.getElementById('wizardNote').textContent")).indexOf("已选") === 0,
+    await evaluate("document.getElementById('wizardNote').textContent")
+  );
+  await clickAt(bookBox.x, bookBox.y);
+  await sleep(400);
+
   await evaluate("document.getElementById('wizardNext').click();true");
   await sleep(500);
   check(

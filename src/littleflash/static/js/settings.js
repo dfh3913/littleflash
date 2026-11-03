@@ -1718,6 +1718,29 @@
         });
       }
 
+      window.addEventListener("resize", syncWizardHeight);
+      if (dom.form) {
+        dom.form.addEventListener("change", refreshWizardNote);
+        dom.form.addEventListener("input", refreshWizardNote);
+      }
+
+      // 非模态对话框按 Esc 不会自己关，这里补上；等同「跳过」，不再反复弹出。
+      document.addEventListener("keydown", function (event) {
+        if (event.key !== "Escape" || !dom.wizard || !dom.wizard.open) return;
+        if (LF.isEditableTarget(event.target)) return;
+        // 恢复默认等模态窗口还开着时，Esc 只关那一层。
+        const anotherDialogOpen = Array.prototype.some.call(
+          document.querySelectorAll("dialog[open]"),
+          function (node) {
+            return node !== dom.wizard;
+          }
+        );
+        if (anotherDialogOpen) return;
+        event.preventDefault();
+        LF.wizard.done();
+        closeWizard();
+      });
+
       const params = new URLSearchParams(window.location.search);
       if (params.get("wizard") === "1" || LF.wizard.needs()) {
         openWizard();
@@ -1727,14 +1750,18 @@
     function openWizard() {
       if (!dom.wizard || dom.wizard.open) return;
       showWizardStep(0);
-      if (typeof dom.wizard.showModal === "function") {
-        dom.wizard.showModal();
+      // 非模态打开：这个向导是「边看边改」的，整页必须保持可点击。
+      // showModal() 会盖一层带虚化的遮罩，把所有设置项都挡住，所以不能用。
+      if (typeof dom.wizard.show === "function") {
+        dom.wizard.show();
       } else {
         dom.wizard.setAttribute("open", "");
       }
+      document.body.classList.add("wizard-open");
+      refreshWizardNote();
       window.setTimeout(function () {
-        if (dom.wizardNext) dom.wizardNext.focus({ preventScroll: true });
-      }, 60);
+        if (dom.wizard) dom.wizard.focus({ preventScroll: true });
+      }, 40);
     }
 
     function closeWizard() {
@@ -1747,6 +1774,25 @@
       } else {
         dom.wizard.removeAttribute("open");
       }
+      document.body.classList.remove("wizard-open");
+      document.documentElement.style.removeProperty("--wizard-h");
+    }
+
+    /* 向导浮在页面底部：告诉页面要给底部留出它的高度，
+       否则滚到最底下的「恢复默认」会被它压住。 */
+    function syncWizardHeight() {
+      if (!dom.wizard || !dom.wizard.open) return;
+      const height = Math.round(dom.wizard.getBoundingClientRect().height);
+      if (height > 0) {
+        document.documentElement.style.setProperty("--wizard-h", height + "px");
+      }
+    }
+
+    /* 向导开着时，页面上的任何改动都同步到提示条，不用傻等下一步。 */
+    function refreshWizardNote() {
+      if (!dom.wizard || !dom.wizard.open) return;
+      if (dom.wizardNote) dom.wizardNote.textContent = wizardNote();
+      syncWizardHeight();
     }
 
     function showWizardStep(index) {
@@ -1788,7 +1834,7 @@
           state.wizardStep === WIZARD_STEPS.length - 1 ? "开始学习" : "下一步"
         );
       }
-      if (dom.wizardNote) dom.wizardNote.textContent = wizardNote();
+      refreshWizardNote();
     }
 
     function wizardNote() {
